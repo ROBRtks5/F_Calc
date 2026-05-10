@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportHeight="108"
+    android:viewportWidth="108">
+    
+    <!-- Stylized Chart Bars (Sleek Grey) -->
+    <path
+        android:fillColor="#3f3f46"
+        android:pathData="M34,68h8v-12h-8z M50,68h8v-24h-8z M66,68h8v-32h-8z" />
+    
+    <!-- Glowing Blue Dot (Active Terminal State) -->
+    <path
+        android:fillColor="#3b82f6"
+        android:pathData="M54,78c2.2,0 4,-1.8 4,-4s-1.8,-4 -4,-4s-4,1.8 -4,4s1.8,4 4,4z" />
+        
+    <!-- Accent line for premium feel -->
+    <path
+        android:fillColor="#ffffff"
+        android:fillAlpha="0.1"
+        android:pathData="M30,34h48v1h-48z" />
+
+</vector>
