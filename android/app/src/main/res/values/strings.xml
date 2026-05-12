@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">VM.MOEX</string>
+    <string name="app_name">Терминал VM.MOEX</string>
     <string name="title_activity_main">VM.MOEX</string>
     <string name="package_name">com.moex.vmcalc</string>
     <string name="custom_url_scheme">com.moex.vmcalc</string>
