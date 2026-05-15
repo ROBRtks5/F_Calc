@@ -11,6 +11,7 @@ import { Trade, PositionType } from './components/types';
 import { SplashScreen } from './components/SplashScreen';
 import { InstructionsModal } from './components/InstructionsModal';
 import { DetailedBreakdownModal } from './components/DetailedBreakdownModal';
+import { generateVMReport } from './lib/reportGenerator';
 
 const formatMoney = (val: number) => {
   return (+val).toLocaleString('ru-RU', { 
@@ -711,142 +712,7 @@ export default function Home() {
     const handleCopy = () => {
     if (!marketData || !details) return;
 
-    const hasCarry = details.netPosCarriedOver !== 0;
-    const hasNew = details.currentTradesDetails && details.currentTradesDetails.length > 0;
-    
-    const posTypeStr = netPosition !== 0 ? 'открыта' : 'полностью закрыта';
-    const pointCost = details.stepPrice / details.minStep;
-    
-    // Header
-    const now = new Date();
-    const moscowTimeStr = now.toLocaleString("en-US", {timeZone: "Europe/Moscow"});
-    const mskNow = new Date(moscowTimeStr);
-    const dateStr = `${String(mskNow.getDate()).padStart(2, '0')}.${String(mskNow.getMonth() + 1).padStart(2, '0')}.${mskNow.getFullYear()}`;
-    const timeStr = `${String(mskNow.getHours()).padStart(2, '0')}:${String(mskNow.getMinutes()).padStart(2, '0')}`;
-
-    const fmtPt = (val: number) => val.toFixed(2).replace('.', ',');
-    const fmtRub = (val: number) => formatMoney(val);
-    const fmtCost = (val: number) => val.toLocaleString('ru-RU', { minimumFractionDigits: 3, maximumFractionDigits: 5 });
-
-    let text = `Краткий итог\n`;
-    text += `Контракт ${ticker.toUpperCase()}, позиция ${posTypeStr} (${Math.abs(netPosition)} лот.). Итого вариационная маржа: ${total > 0 ? '+' : ''}${fmtRub(total)} ₽.\n`;
-    if (calcMode === 'Live') {
-      text += `⚠️ Предварительный расчет. Данные обновятся после фиксации цен в 19:00.\n`;
-    }
-    text += `\n1. Что и когда совершено\n`;
-
-    if (hasNew) {
-       details.currentTradesDetails.forEach((trade: any) => {
-          const side = trade.type === 'Long' ? 'куплен' : 'продан';
-          const periodStr = trade.period === 'morning' ? 'Основная сессия' : 'Вечерняя сессия';
-          text += `• ${periodStr} ${trade.date}: ${side} ${trade.lots} лот. по ${fmtPt(trade.priceInPoints)} пт.\n`;
-       });
-    } else if (hasCarry) {
-       text += `• Активная позиция перенесена с прошлых клирингов, новых сделок внутри сессии не совершалось.\n`;
-    }
-    
-    if (hasNew && !hasCarry && netPosition === 0) {
-        text += `Позиция полностью закрыта внутри дня.\n`;
-    } else if (netPosition !== 0) {
-        text += `Позиция открыта и перенесена на следующий торговый день.\n`;
-    } else {
-        text += `Позиция закрыта.\n`;
-    }
-    text += `\n`;
-
-    text += `2. Как определяется стоимость пункта\n`;
-    let assetLogic = "Контракт торгуется в пунктах.";
-    const uTicker = ticker.toUpperCase();
-    if (['S1M', 'GOLD', 'SILV', 'SLV'].some(x => uTicker.includes(x))) {
-        assetLogic = "Контракт на драгоценные металлы номинирован в долларах за тройскую унцию, торгуется в рублях. Стоимость шага зависит от индикативного курса USD/RUB, который фиксируется биржей в 19:00.";
-    } else if (['RTS', 'MIX'].some(x => uTicker.includes(x))) {
-        assetLogic = "Контракт на фондовые индексы номинирован в долларах. Стоимость шага зависит от курса USD/RUB на 19:00.";
-    } else if (['IMOEXF', 'MXI'].some(x => uTicker.includes(x))) {
-        assetLogic = "Контракт на рублевые индексы. Стоимость шага фиксирована в рублях.";
-    } else if (['SI', 'CNY', 'USDRUB'].some(x => uTicker.includes(x))) {
-        assetLogic = "Контракт на валюту. Стоимость шага зависит от индикативного курса на 19:00.";
-    } else if (['BR', 'NG'].some(x => uTicker.includes(x))) {
-        assetLogic = "Контракт на товары номинирован в долларах. Стоимость шага зависит от индикативного курса USD/RUB на 19:00.";
-    }
-    
-    text += `${assetLogic}\n`;
-    text += `• Минимальный шаг цены: ${fmtPt(details.minStep)} пт.\n`;
-    let sourceDateStr = dateStr;
-    if (calcMode === 'Live') {
-       if (timeline && timeline.length > 0) {
-          sourceDateStr = timeline[timeline.length - 1].date;
-       }
-       text += `• Стоимость шага (курс на 19:00 ${sourceDateStr}): ${fmtCost(details.stepPrice)} ₽.\n`;
-    } else {
-       text += `• Стоимость шага (на 19:00 ${dateStr}): ${fmtCost(details.stepPrice)} ₽.\n`;
-    }
-    text += `• Стоимость 1 целого пункта: ${fmtCost(details.stepPrice)} / ${fmtPt(details.minStep)} = ${fmtCost(pointCost)} ₽.\n`;
-    if (calcMode === 'Live') {
-       text += `Это последний зафиксированный курс, так как сегодняшний клиринг еще не наступил.\n`;
-    }
-    text += `\n`;
-
-    text += `3. Откуда берутся расчётные цены\n`;
-    if (hasCarry) {
-       text += `• ${fmtPt(details.prevSettlePrice)} пт. — расчетная цена предыдущего клиринга. Она служит точкой старта для перенесенных позиций.\n`;
-    } else {
-       text += `• ${fmtPt(details.prevSettlePrice)} пт. — расчетная цена предыдущего клиринга (справочно, так как позиция не переносилась).\n`;
-    }
-
-    if (calcMode === 'Live') {
-        text += `• Сегодняшняя РЦ ещё не определена. Ожидаем фиксации в 19:00.\n\n`;
-    } else {
-        text += `• ${fmtPt(details.targetPrice)} пт. — новая расчетная цена, зафиксированная сегодня в 19:00.\n\n`;
-    }
-
-    text += `4. Пошаговый расчёт\n`;
-    
-    let layerIndex = 0;
-    const getLayerLabel = () => {
-       const labels = ['(А)', '(Б)', '(В)', '(Г)', '(Д)'];
-       return labels[layerIndex++] || '(X)';
-    };
-
-    if (hasNew && !hasCarry && netPosition === 0) {
-        text += `Позиция открыта и закрыта внутри одного дня, поэтому результат определяется только разницей ваших цен сделок.\n`;
-        let specPoints = 0;
-        details.currentTradesDetails.forEach((trade: any) => {
-           specPoints += (details.targetPrice - trade.priceInPoints) * trade.lots * (trade.type === 'Long' ? 1 : -1);
-        });
-        
-        text += `• Прибыль в пунктах: ${specPoints > 0 ? '+' : ''}${fmtPt(specPoints)} пт.\n`;
-        text += `• ВМ = ${fmtPt(Math.abs(specPoints))} пт. × ${fmtCost(pointCost)} ₽ = ${details.pendingFromNew > 0 ? '+' : ''}${fmtRub(Math.abs(details.pendingFromNew))} ₽.\n`;
-    } else {
-        text += `Результат складывается из следующих компонентов:\n`;
-        if (hasNew && details.pendingFromNew !== 0) {
-             text += `${getLayerLabel()} Внутридневные сделки:\n`;
-             text += `  Результат от новых сделок относительно РЦ: ${details.pendingFromNew > 0 ? '+' : ''}${fmtRub(details.pendingFromNew)} ₽.\n`;
-        }
-        if (hasCarry && details.pendingFromCarry !== 0) {
-             text += `${getLayerLabel()} Переоценка остатков (перенесенных позиций):\n`;
-             text += `  (${fmtPt(details.targetPrice)} пт. - ${fmtPt(details.prevSettlePrice)} пт.) × ${fmtCost(pointCost)} ₽ × ${Math.abs(details.netPosCarriedOver)} лот. = ${details.pendingFromCarry > 0 ? '+' : ''}${fmtRub(details.pendingFromCarry)} ₽.\n`;
-        }
-    }
-
-    if (isPerp && funding) {
-      const fundingVal = -parseFloat(funding) * netPosition;
-      if (fundingVal !== 0) {
-        text += `${getLayerLabel()} Фандинг (комиссия за перенос вечных фьючерсов): ${fundingVal > 0 ? '+' : ''}${fmtRub(fundingVal)} ₽.\n`;
-      }
-    }
-
-    if (settled !== 0) {
-      text += `${getLayerLabel()} Историческая маржа (зафиксировано за прошлые клиринги): ${settled > 0 ? '+' : ''}${fmtRub(settled)} ₽.\n`;
-    }
-    
-    text += `\n5. Итог и зачисление\n`;
-    text += `Итого вариационная маржа: ${total > 0 ? '+' : ''}${fmtRub(total)} ₽.\n`;
-    text += `Сумма зачисляется на счёт в клиринг (23:50–00:30 МСК) и сразу доступна для торговли.\n\n`;
-
-    text += `6. Если остались сомнения\n`;
-    text += `Все расчёты выполняет НКО НКЦ (АО) — центральный контрагент биржи. Процесс автоматизирован. Расчётная цена и индикативные курсы фиксируются в 19:00, начисление вариационной маржи происходит в клиринговую сессию (23:50–00:30 МСК).\nОфициальные методики: https://www.moex.com/s255`;
-
-    const reportText = text;
+    const reportText = generateVMReport(ticker, isPerp, marketData, calculations, calcMode, marketPhase, validTradesMapped);
     
     if (navigator.share) {
       hapticFeedback('medium');
