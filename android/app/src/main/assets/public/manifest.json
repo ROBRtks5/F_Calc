@@ -1,21 +1,53 @@
 {
-  "name": "MOEX Margin Calc",
-  "short_name": "VM Calc",
-  "description": "Калькулятор вариационной маржи Мосбиржи (ЕТС 2026)",
+  "name": "F.calc",
+  "short_name": "F.calc",
+  "description": "Калькулятор фьючерсов и маржи MOEX",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#09090b",
-  "theme_color": "#2563eb",
+  "theme_color": "#09090b",
   "icons": [
     {
-      "src": "https://picsum.photos/seed/calc/192/192",
-      "sizes": "192x192",
-      "type": "image/png"
+      "src": "/icons/icon-48.webp",
+      "type": "image/webp",
+      "sizes": "48x48",
+      "purpose": "any maskable"
     },
     {
-      "src": "https://picsum.photos/seed/calc/512/512",
+      "src": "/icons/icon-72.webp",
+      "type": "image/webp",
+      "sizes": "72x72",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-96.webp",
+      "type": "image/webp",
+      "sizes": "96x96",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-128.webp",
+      "type": "image/webp",
+      "sizes": "128x128",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-192.webp",
+      "type": "image/webp",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-256.webp",
+      "type": "image/webp",
+      "sizes": "256x256",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.webp",
+      "type": "image/webp",
       "sizes": "512x512",
-      "type": "image/png"
+      "purpose": "any maskable"
     }
   ]
 }

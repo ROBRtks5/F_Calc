@@ -2,5 +2,5 @@
   "name": "MOEX VM Calculator 2026",
   "description": "Калькулятор вариационной маржи фьючерсов Мосбиржи с учетом Единой Торговой Сессии 2026",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@capacitor/core": "^8.3.3",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/splash-screen": "^8.0.1",
     "@google/genai": "^1.17.0",
     "@hookform/resolvers": "^5.2.1",
     "autoprefixer": "^10.4.21",
@@ -26,6 +28,7 @@
   },
   "devDependencies": {
     "@capacitor/android": "^8.3.3",
+    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.3.3",
     "@tailwindcss/postcss": "4.1.11",
     "@tailwindcss/typography": "^0.5.19",

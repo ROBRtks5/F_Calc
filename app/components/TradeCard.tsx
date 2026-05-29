@@ -20,10 +20,10 @@ export const TradeCard = memo(({
   return (
     <div className="bg-zinc-950/80 border border-zinc-800 rounded-2xl p-4 space-y-3 group hover:border-zinc-700 transition-all focus-within:border-blue-500/50">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-black text-zinc-600 uppercase">#{totalCount - index}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-[12px] font-black text-white/50 uppercase tracking-widest bg-zinc-900/50 px-2 py-1 rounded-md border border-zinc-800/50">Сделка #{index + 1}</span>
           <button 
-            onClick={() => onUpdate(trade.id, 'type', trade.type === 'Long' ? 'Short' : 'Long')}
+            onClick={() => { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(10); onUpdate(trade.id, 'type', trade.type === 'Long' ? 'Short' : 'Long'); }}
             className={cn(
               "px-2 py-0.5 rounded text-[9px] font-black uppercase transition-all active:scale-95", 
               trade.type === 'Long' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'
@@ -41,38 +41,14 @@ export const TradeCard = memo(({
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <div className="space-y-1">
+      <div className="flex gap-2">
+        <div className="flex-1 space-y-1">
           <p className="text-[8px] font-bold text-zinc-600 uppercase ml-1">Дата сделки</p>
           <input 
             type="date" value={trade.date}
             onChange={(e) => onUpdate(trade.id, 'date', e.target.value)}
             className="bg-zinc-900 border border-zinc-800/50 rounded-lg px-2 py-1.5 w-full text-[16px] md:text-[10px] text-white focus:outline-none focus:ring-1 focus:ring-blue-500/30"
           />
-        </div>
-        <div className="space-y-1">
-          <p className="text-[8px] font-bold text-zinc-600 uppercase ml-1">Сессия сделки</p>
-          <button
-            type="button"
-            onClick={() => onUpdate(trade.id, 'period', trade.period === 'morning' ? 'evening' : 'morning')}
-            className={cn(
-              "relative w-full h-9 md:h-8 flex items-center rounded-lg p-1 transition-colors duration-300 focus:outline-none mt-[1px]",
-              trade.period === 'morning' ? "bg-zinc-800" : "bg-blue-600/20"
-            )}
-          >
-            <div 
-              className={cn(
-                "absolute h-[calc(100%-8px)] w-[calc(50%-4px)] left-1 rounded-md shadow-sm transition-all duration-300 ease-out",
-                trade.period === 'morning' ? "bg-zinc-700 translate-x-0" : "bg-blue-500 translate-x-[calc(100%+0px)]"
-              )}
-            />
-            <div className="relative flex-1 z-10 flex justify-center items-center">
-              <span className={cn("text-[10px] sm:text-[9px] font-bold uppercase transition-colors tracking-widest", trade.period === 'morning' ? "text-white" : "text-zinc-500")}>Утро</span>
-            </div>
-            <div className="relative flex-1 z-10 flex justify-center items-center">
-              <span className={cn("text-[10px] sm:text-[9px] font-bold uppercase transition-colors tracking-widest", trade.period === 'evening' ? "text-blue-200" : "text-zinc-500")}>Вечер</span>
-            </div>
-          </button>
         </div>
       </div>
 
@@ -111,7 +87,7 @@ export const TradeCard = memo(({
           <p className="text-[8px] font-bold text-zinc-600 uppercase ml-1">Лоты</p>
           <div className="flex bg-zinc-900 rounded-lg p-0.5 border border-zinc-800/50">
             <button 
-              onClick={() => onUpdate(trade.id, 'lots', Math.max(0, trade.lots - 1))}
+              onClick={() => { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(10); onUpdate(trade.id, 'lots', Math.max(0, trade.lots - 1)); }}
               className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white transition-colors"
             >-</button>
             <input 
@@ -121,7 +97,7 @@ export const TradeCard = memo(({
               className="w-full bg-transparent text-center text-[16px] md:text-xs text-white font-mono focus:outline-none"
             />
             <button 
-              onClick={() => onUpdate(trade.id, 'lots', trade.lots + 1)}
+              onClick={() => { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(10); onUpdate(trade.id, 'lots', trade.lots + 1); }}
               className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white transition-colors"
             >+</button>
           </div>

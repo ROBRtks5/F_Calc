@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useCallback, useEffect, useMemo, useRef, memo } from 'react';
-import { Search, Copy, Check, TrendingUp, TrendingDown, RefreshCw, AlertTriangle, Info, Plus, Trash2, HelpCircle, X } from 'lucide-react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { Search, Copy, Check, TrendingUp, RefreshCw, AlertTriangle, Info, Plus, Trash2, HelpCircle, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -39,11 +39,27 @@ async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 
   }
 }
 
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
+
+const getMoexSessionDateStr = (): string => {
+  const moscowTimeStr = new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"});
+  const mskNow = new Date(moscowTimeStr);
+  const sessionDate = new Date(mskNow);
+  if (mskNow.getHours() >= 19) sessionDate.setDate(sessionDate.getDate() + 1);
+  if (sessionDate.getDay() === 6) sessionDate.setDate(sessionDate.getDate() + 2);
+  else if (sessionDate.getDay() === 0) sessionDate.setDate(sessionDate.getDate() + 1);
+  const year = sessionDate.getFullYear();
+  const month = String(sessionDate.getMonth() + 1).padStart(2, '0');
+  const day = String(sessionDate.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export default function Home() {
   const [ticker, setTicker] = useState('');
   const [allInstruments, setAllInstruments] = useState<{ list: { ticker: string, name: string, uid?: string, type?: string, source?: string, realExchange?: string, classCode?: string }[], synced: boolean }>({ list: [], synced: false });
   
   const [isSyncing, setIsSyncing] = useState(false);
+  const isSyncingRef = useRef(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [funding, setFunding] = useState('');
@@ -70,16 +86,24 @@ export default function Home() {
   const [isInstructionsOpen, setIsInstructionsOpen] = useState(false);
   const [isDetailedBreakdownOpen, setIsDetailedBreakdownOpen] = useState(false);
 
-  const hapticFeedback = useCallback((strength: 'light' | 'medium' | 'heavy' = 'light') => {
-    if (typeof window !== 'undefined' && navigator.vibrate) {
-      const pattern = strength === 'heavy' ? [50, 30, 50] : strength === 'medium' ? [30] : [10];
-      navigator.vibrate(pattern);
+  const hapticFeedback = useCallback(async (strength: 'light' | 'medium' | 'heavy' = 'light') => {
+    try {
+      if (typeof window !== 'undefined') {
+        const style = strength === 'heavy' ? ImpactStyle.Heavy : strength === 'medium' ? ImpactStyle.Medium : ImpactStyle.Light;
+        await Haptics.impact({ style });
+      }
+    } catch (e) {
+      if (typeof window !== 'undefined' && navigator.vibrate) {
+        const pattern = strength === 'heavy' ? [50, 30, 50] : strength === 'medium' ? [30] : [10];
+        navigator.vibrate(pattern);
+      }
     }
   }, []);
 
   // Removed syncInstruments from down below and defined here:
   const syncInstruments = useCallback(async () => {
-    if (isSyncing) return;
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
     setIsSyncing(true);
     setError(null);
     try {
@@ -113,8 +137,9 @@ export default function Home() {
       }
     } finally {
       setIsSyncing(false);
+      isSyncingRef.current = false;
     }
-  }, [isSyncing, hapticFeedback]);
+  }, [hapticFeedback]);
 
   useEffect(() => {
     let instruments: any[] = [];
@@ -158,7 +183,6 @@ export default function Home() {
         setTrades([{
             id: '1',
             date: new Date().toISOString().split('T')[0],
-            period: 'morning',
             type: 'Long',
             price: '',
             priceMode: 'rubles',
@@ -220,18 +244,16 @@ export default function Home() {
 
     if (isWeekend) {
       return {
-        calcMode: 'Clearing' as const,
         phase: {
           id: 'weekend',
-          name: 'Выходные',
-          description: 'Торги закрыты. Значения зафиксированы.'
+          name: 'Выходные (ДСВД)',
+          description: 'Дополнительная сессия выходного дня. Расчеты предварительные.'
         }
       };
     }
 
     if (timeVal >= 850 && timeVal < 1900) {
       return {
-        calcMode: 'Live' as const,
         phase: {
           id: 'intraday',
           name: 'Текущие торги',
@@ -240,16 +262,14 @@ export default function Home() {
       };
     } else if (timeVal >= 1900 && timeVal < 2350) {
       return {
-        calcMode: 'Clearing' as const,
         phase: {
           id: 'planned',
           name: 'Ожидание клиринга (19:00-23:50)',
-          description: 'Цены зафиксированы. Биржа производит расчет ВМ.'
+          description: 'Основные цены зафиксированы. Идет вечерняя сессия.'
         }
       };
     } else if (timeVal >= 2350 || timeVal < 850) {
       return {
-        calcMode: 'Clearing' as const,
         phase: {
           id: 'post-clearing',
           name: 'Ночная пауза',
@@ -258,7 +278,6 @@ export default function Home() {
       };
     } else {
       return {
-        calcMode: 'Live' as const,
         phase: {
           id: 'unknown',
           name: 'Текущие торги',
@@ -268,8 +287,32 @@ export default function Home() {
     }
   }, []);
 
-  const [session, setSession] = useState<{calcMode: 'Live' | 'Clearing', phase: any}>({
-    calcMode: 'Live',
+  const getNextClearingTimeText = useCallback(() => {
+    const moscowTimeStr = new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"});
+    const mskNow = new Date(moscowTimeStr);
+    const dayOfWeek = mskNow.getDay();
+    const hours = mskNow.getHours();
+    const minutes = mskNow.getMinutes();
+    const timeVal = hours * 100 + minutes;
+
+    let targetDay = 'Сегодня';
+    let targetTime = '23:50';
+
+    if (dayOfWeek === 6 || dayOfWeek === 0) {
+        targetDay = 'След. раб. день';
+    } else if (dayOfWeek === 5 && timeVal >= 2350) {
+        targetDay = 'След. раб. день';
+    } else {
+        if (timeVal >= 2350) {
+            targetDay = 'Сегодня (вечер)';
+        } else {
+            targetDay = 'Сегодня';
+        }
+    }
+    return `${targetDay} 23:50`;
+  }, []);
+
+  const [session, setSession] = useState<{phase: any}>({
     phase: {
       id: 'intraday',
       name: 'Загрузка...',
@@ -277,7 +320,7 @@ export default function Home() {
     }
   });
 
-  const { calcMode, phase: marketPhase } = session;
+  const { phase: marketPhase } = session;
 
   const updateMarketSession = useCallback(() => {
     setSession(getMarketSession());
@@ -335,8 +378,7 @@ export default function Home() {
     hapticFeedback('heavy');
     setTrades([{
       id: '1',
-      date: new Date().toISOString().split('T')[0],
-      period: 'morning',
+      date: getMoexSessionDateStr(),
       type: 'Long',
       price: '',
       priceMode: 'rubles',
@@ -360,6 +402,9 @@ export default function Home() {
     setLoading(true);
     setError(null);
     setHistoryStatus('loading');
+    
+    // Clear previous data to prevent race condition between old history and new market data
+    setHistoryData(null);
     
     try {
       // Clear custom price on explicit refresh
@@ -479,8 +524,7 @@ export default function Home() {
     hapticFeedback('light');
     setTrades([...trades, {
       id: Date.now().toString() + Math.random().toString(),
-      date: new Date().toISOString().split('T')[0],
-      period: 'morning',
+      date: getMoexSessionDateStr(),
       type: 'Long',
       price: '',
       priceMode: 'rubles',
@@ -498,13 +542,14 @@ export default function Home() {
   };
 
   const calculations = useMemo(() => {
-    if (!marketData || trades.length === 0) return { total: 0, pending: 0, settled: 0, netPosition: 0, details: null, timeline: [] };
+    if (!marketData || trades.length === 0) return { total: 0, pending: 0, settled: 0, settledUnpaid: 0, netPosition: 0, details: null, timeline: [] };
 
     const { last, prevSettlePrice, settlePrice, stepPrice, minStep } = marketData;
     
     // Custom price override
-    const effectiveLast = customPrice !== '' && !isNaN(parseFloat(customPrice)) ? parseFloat(customPrice) : last;
-    const targetPrice = calcMode === 'Live' ? effectiveLast : (settlePrice || effectiveLast);
+    const fallbackLast = last > 0 ? last : (settlePrice || prevSettlePrice);
+    const effectiveLast = customPrice !== '' && !isNaN(parseFloat(customPrice)) ? parseFloat(customPrice) : fallbackLast;
+    const targetPrice = effectiveLast;
 
     let netPosition = 0;
     let totalVM = 0;
@@ -528,52 +573,25 @@ export default function Home() {
         totalVM += pnlFix;
     }
 
-    const getNormDate = (dateStr: string, period: 'morning' | 'evening' | undefined) => {
-        if (!period || period === 'morning') return dateStr;
-        const d = new Date(dateStr);
-        const day = d.getDay();
-        if (day === 5) d.setDate(d.getDate() + 3); // Friday -> Monday
-        else if (day === 6) d.setDate(d.getDate() + 2); // Saturday -> Monday
-        else d.setDate(d.getDate() + 1);
-        return d.toISOString().split('T')[0];
-    };
-
     const moscowTimeStr = new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"});
     const mskNow = new Date(moscowTimeStr);
-    
-    // Determine the MOEX trading session this exact moment belongs to
-    const sessionDate = new Date(mskNow);
-    // If it's 19:00 MSK or later, we are officially in the NEXT DAY's trading session
-    if (mskNow.getHours() >= 19) {
-        sessionDate.setDate(sessionDate.getDate() + 1);
-    }
-    
-    // Skip weekends for MOEX calendar mapping
-    if (sessionDate.getDay() === 6) { // Saturday
-        sessionDate.setDate(sessionDate.getDate() + 2); // -> back to Monday session
-    } else if (sessionDate.getDay() === 0) { // Sunday
-        sessionDate.setDate(sessionDate.getDate() + 1); // -> back to Monday session
-    }
-
-    const year = sessionDate.getFullYear();
-    const month = String(sessionDate.getMonth() + 1).padStart(2, '0');
-    const day = String(sessionDate.getDate()).padStart(2, '0');
-    
-    const todayClearingDate = `${year}-${month}-${day}`;
+    const todayClearingDate = getMoexSessionDateStr();
     
     let netPosCarriedOver = 0;
     let currentTradesPnL = 0;
     let currentTradesDetails: any[] = [];
 
     let latestHistoryDateStr = '';
+    let effectivePrevSettlePrice = prevSettlePrice;
     if (historyData && historyData.length > 0) {
        const sortedHd = [...historyData].sort((a, b) => a.tradeDate.localeCompare(b.tradeDate));
        latestHistoryDateStr = sortedHd[sortedHd.length - 1].tradeDate.split('T')[0];
+       effectivePrevSettlePrice = sortedHd[sortedHd.length - 1].settlePrice;
     }
 
     const normTrades = validTrades.map(t => ({
       ...t,
-      normDate: getNormDate(t.date, t.period)
+      normDate: t.date
     }));
 
     for (const t of normTrades) {
@@ -595,7 +613,7 @@ export default function Home() {
         }
     }
     
-    const ticksCarried = Math.round((targetPrice - prevSettlePrice) / minStep);
+    const ticksCarried = Math.round((targetPrice - effectivePrevSettlePrice) / minStep);
     const pendingFromCarry = ticksCarried * stepPrice * netPosCarriedOver;
     const pendingFromNew = currentTradesPnL;
     let pendingVM = pendingFromCarry + pendingFromNew;
@@ -648,23 +666,37 @@ export default function Home() {
                     dailyVM += ticks * stepPrice * dir * t.lots;
                });
 
+               const parts = day.tradeDate.split('-');
+               const clearingTimeMSK = new Date(+parts[0], +parts[1] - 1, +parts[2], 23, 50, 0);
+               const isDebited = mskNow >= clearingTimeMSK;
+
                timeline.push({
                    date: day.tradeDate,
                    settlePrice: day.settlePrice,
                    netPos: carryPosAtStart + todayTrades.reduce((acc, t) => acc + (t.type === 'Long' ? 1 : -1) * t.lots, 0),
-                   dailyVM
+                   dailyVM,
+                   isDebited
                });
            });
        }
     }
 
-    const settledVM = timeline.reduce((acc, h) => acc + h.dailyVM, 0);
-    const finalTotalVM = settledVM + pendingVM;
+    let rawSettledDebitedVM = timeline.filter(h => h.isDebited).reduce((acc, h) => acc + h.dailyVM, 0);
+    const rawSettledUnpaidVM = timeline.filter(h => !h.isDebited).reduce((acc, h) => acc + h.dailyVM, 0);
+    const rawSettledVM = rawSettledDebitedVM + rawSettledUnpaidVM; 
+    
+    // MATHEMATICAL CORE (Cycle 1 Audit): 
+    // totalVM computes total PnL purely via (target-entry) ignoring intermediate history API gaps.
+    // If the API missed some days (e.g. weekends or untracked history), rawSettledVM would leak profit.
+    // We force the mathematical alignment:
+    const mathematicallyMissedVM = totalVM - (pendingVM + rawSettledVM);
+    rawSettledDebitedVM += mathematicallyMissedVM;
 
     return { 
-      total: finalTotalVM,
-      pending: pendingVM, 
-      settled: settledVM, 
+      total: Number(totalVM.toFixed(2)),
+      pending: Number(pendingVM.toFixed(2)), 
+      settled: Number(rawSettledDebitedVM.toFixed(2)), 
+      settledUnpaid: Number(rawSettledUnpaidVM.toFixed(2)),
       netPosition, 
       details: { 
         targetPrice, 
@@ -680,9 +712,9 @@ export default function Home() {
       }, 
       timeline 
     };
-  }, [marketData, trades, calcMode, isPerp, funding, historyData, customPrice]);
+  }, [marketData, trades, isPerp, funding, historyData, customPrice]);
 
-  const { total, pending, settled, netPosition, details, timeline } = calculations;
+  const { total, pending, settled, settledUnpaid, netPosition, details, timeline } = calculations;
 
   // validTradesMapped has priceInPoints computed:
   const validTradesMapped = useMemo(() => {
@@ -707,12 +739,12 @@ export default function Home() {
     avgEntry = 'Сделки закрыты';
   }
 
-  const pointsDiff = details ? ((total - (details.fundingTotal || 0)) / (details.stepPrice / details.minStep)).toFixed(2) : '0.00';
+  const pointsDiff = details ? ((total - (details.fundingTotal || 0)) / ((details.stepPrice / details.minStep) || 1)).toFixed(2) : '0.00';
 
     const handleCopy = () => {
     if (!marketData || !details) return;
 
-    const reportText = generateVMReport(ticker, isPerp, marketData, calculations, calcMode, marketPhase, validTradesMapped);
+    const reportText = generateVMReport(ticker, isPerp, marketData, calculations, marketPhase, validTradesMapped);
     
     if (navigator.share) {
       hapticFeedback('medium');
@@ -900,57 +932,110 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="mt-6">
-                    <div className="h-2 w-full bg-zinc-900 rounded-full flex overflow-hidden mb-2">
-                       <div className={cn("h-full transition-all duration-500", pending > 0 ? "bg-emerald-500" : pending < 0 ? "bg-rose-500" : "bg-zinc-700")} style={{ width: '100%' }}>
-                         {pending !== 0 && (
-                           <div className="w-full h-full opacity-30 bg-[repeating-linear-gradient(-45deg,transparent,transparent_4px,rgba(255,255,255,0.5)_4px,rgba(255,255,255,0.5)_8px)]" />
+                <div className="mt-6 space-y-4">
+                   {(netPosition === 0 && pending === 0 && settledUnpaid === 0 && (!details || !details.currentTradesDetails || details.currentTradesDetails.length === 0)) ? (
+                      <div className="flex flex-col items-center justify-center p-4 rounded-2xl bg-zinc-950/80 border border-zinc-800/80 shadow-inner">
+                         <span className={cn("text-lg font-black tracking-tight", total > 0 ? "text-emerald-500" : total < 0 ? "text-rose-500" : "text-zinc-300")}>ОБЩИЙ РЕЗУЛЬТАТ: {total > 0 ? '+' : ''}{formatMoney(total)} ₽</span>
+                         <span className="text-zinc-500 text-[10px] mt-2 font-medium bg-zinc-900 px-3 py-1 rounded-full ring-1 ring-zinc-800">
+                            Финальный (зафиксировано)
+                         </span>
+                         {timeline && timeline.length > 0 && (
+                            <span className="text-emerald-500/80 text-[10px] font-medium mt-2 bg-emerald-500/10 px-2 py-0.5 rounded uppercase tracking-wider">
+                              Средства уже списаны/зачислены ({timeline[timeline.length - 1].date} 23:50)
+                            </span>
                          )}
-                       </div>
-                    </div>
-                    <div className="flex justify-between items-start text-[11px]">
+                      </div>
+                   ) : (
+                     <div className="bg-zinc-950/60 border border-zinc-800/80 p-4 rounded-2xl shadow-inner space-y-3">
+                      <div className="flex justify-between items-end mb-2">
+                        <span className="text-zinc-400 text-xs font-bold uppercase tracking-widest">Общий результат</span>
+                        <span className={cn("text-lg font-black tracking-tight", total > 0 ? "text-emerald-500" : total < 0 ? "text-rose-500" : "text-white")}>
+                          {total > 0 ? '+' : ''}{formatMoney(total)} ₽
+                        </span>
+                      </div>
                       <div>
-                        <span className="text-zinc-400 block">{formatMoney(settled)} ₽</span>
-                        <span className="text-zinc-600 text-[10px]">уже зачислено</span>
+                        {(() => {
+                           const hasSettled = settled !== 0;
+                           const hasUnpaid = settledUnpaid !== 0;
+                           const hasPending = pending !== 0 || netPosition !== 0; // Always show pending if there's an open position
+                           const segmentsCount = (hasSettled ? 1 : 0) + (hasUnpaid ? 1 : 0) + (hasPending ? 1 : 0) || 1;
+                           const segWidth = `${100 / segmentsCount}%`;
+                           return (
+                             <>
+                                <div className="h-2 w-full bg-zinc-900 rounded-full flex overflow-hidden mb-2 shadow-inner">
+                                   {hasSettled && (
+                                     <div className="h-full bg-zinc-700 transition-all duration-500" style={{ width: segWidth }} />
+                                   )}
+                                   {hasUnpaid && (
+                                     <div className="h-full bg-blue-500/80 transition-all duration-500" style={{ width: segWidth }}>
+                                        <div className="w-full h-full opacity-20 bg-[repeating-linear-gradient(-45deg,transparent,transparent_4px,rgba(255,255,255,0.5)_4px,rgba(255,255,255,0.5)_8px)]" />
+                                     </div>
+                                   )}
+                                   {((hasPending) || (!hasSettled && !hasUnpaid)) && (
+                                     <div className={cn("h-full transition-all duration-500", pending > 0 ? "bg-emerald-500" : pending < 0 ? "bg-rose-500" : "bg-zinc-800")} style={{ width: segWidth }}>
+                                       {pending !== 0 && (
+                                         <div className="w-full h-full opacity-30 bg-[repeating-linear-gradient(-45deg,transparent,transparent_4px,rgba(255,255,255,0.5)_4px,rgba(255,255,255,0.5)_8px)]" />
+                                       )}
+                                     </div>
+                                   )}
+                                </div>
+                                <div className="flex justify-between items-start text-[11px] mt-2">
+                                  {hasSettled ? (
+                                    <div className="flex flex-col flex-1">
+                                      <span className="text-zinc-300 block font-medium tracking-tight mb-0.5">{formatMoney(settled)} ₽</span>
+                                      <span className="text-zinc-500 text-[9px] leading-[10px]">списано</span>
+                                    </div>
+                                  ) : <div className="flex-1" />}
+                                  {hasUnpaid ? (
+                                    <div className="flex flex-col flex-1 text-center border-l border-r border-zinc-800/50 px-2 mx-2">
+                                      <span className="text-blue-400 block font-medium tracking-tight mb-0.5">{settledUnpaid > 0 ? '+' : ''}{formatMoney(settledUnpaid)} ₽</span>
+                                      <span className="text-blue-500/70 text-[9px] leading-[10px]">расчетная<br/>(ожидает)</span>
+                                    </div>
+                                  ) : <div className="flex-1" />}
+                                  <div className="text-right flex flex-col flex-1">
+                                    <span className={cn("block font-medium tracking-tight mb-0.5", pending > 0 ? "text-emerald-500" : pending < 0 ? "text-rose-500" : "text-zinc-400")}>
+                                      {pending > 0 ? '+' : ''}{formatMoney(pending)} ₽
+                                    </span>
+                                    <span className={cn("text-[9px] leading-[10px] flex items-center justify-end", pending > 0 ? "text-emerald-500/70" : pending < 0 ? "text-rose-500/70" : "text-zinc-600")}>
+                                      предварительно <span className="text-[7px] leading-none opacity-80 mt-0.5 ml-1">▶</span>
+                                    </span>
+                                  </div>
+                                </div>
+                             </>
+                           );
+                        })()}
                       </div>
-                      <div className="text-right">
-                        <span className={cn("block font-medium", pending > 0 ? "text-emerald-500" : pending < 0 ? "text-rose-500" : "text-zinc-400")}>
-                          {pending > 0 ? '+' : ''}{formatMoney(pending)} ₽
-                        </span>
-                        <span className={cn("text-[10px] flex items-center gap-1 justify-end", pending > 0 ? "text-emerald-500/80" : pending < 0 ? "text-rose-500/80" : "text-zinc-600")}>
-                          ожидается {pending !== 0 && <span className="text-[8px] leading-none opacity-80 mt-0.5">▶</span>}
-                        </span>
+                      <div className="flex justify-between items-center text-[10px] bg-zinc-900/50 px-3 py-2 rounded-lg border border-zinc-800/80">
+                        <span className="text-zinc-500">Ближайшее списание (клиринг):</span>
+                        <span className="text-zinc-400 font-mono tracking-tighter">{getNextClearingTimeText()}</span>
                       </div>
-                    </div>
+                     </div>
+                   )}
                 </div>
 
                    <div className="space-y-3 mt-4 bg-zinc-950/40 p-4 rounded-2xl border border-zinc-800/30">
                   <div className="flex justify-between items-center text-[11px] text-zinc-500 h-[28px]">
                     <div className="flex items-center gap-1 group">
-                      <span>{calcMode === 'Live' ? 'Рыночная цена (котировка):' : 'Расчетная цена клиринга (19:00):'}</span>
-                      <Tooltip title={calcMode === 'Live' ? 'Текущая рыночная цена' : 'Расчетная цена (РЦ)'} content={calcMode === 'Live' ? 'Текущая цена последней сделки на бирже. Можно изменить вручную для моделирования ситуаций.' : 'Цена, зафиксированная на вечернем клиринге, по которой биржа производит расчет маржи.'}>
+                      <span>Текущая рыночная цена (котировка):</span>
+                      <Tooltip title="Текущая рыночная цена" content="Текущая цена последней сделки на бирже. Можно изменить вручную для моделирования ситуаций (предварительного расчета).">
                         <HelpCircle className="w-3 h-3 text-zinc-800 hover:text-blue-400 cursor-pointer" />
                       </Tooltip>
                     </div>
-                    {calcMode === 'Live' ? (
-                      <div className="relative">
-                        <input 
-                          type="number" 
-                          value={customPrice}
-                          onChange={(e) => setCustomPrice(e.target.value)}
-                          className="w-24 bg-zinc-900 border border-zinc-700/50 rounded text-right px-2 py-1 font-mono text-zinc-300 font-bold focus:outline-none focus:ring-1 focus:ring-blue-500/50 transition-all [&::-webkit-inner-spin-button]:appearance-none"
-                          placeholder={details?.targetPrice?.toString() || '0.00'}
-                          step="any"
-                        />
-                        {customPrice !== '' && (
-                           <button onClick={() => setCustomPrice('')} className="absolute right-[-20px] top-1.5 opacity-50 hover:opacity-100 transition-opacity">
-                             <X className="w-4 h-4 text-zinc-400" />
-                           </button>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="font-mono text-zinc-300 font-bold">{details?.targetPrice || '---'}</span>
-                    )}
+                    <div className="relative">
+                      <input 
+                        type="number" 
+                        value={customPrice}
+                        onChange={(e) => setCustomPrice(e.target.value)}
+                        className="w-24 bg-zinc-900 border border-zinc-700/50 rounded text-right px-2 py-1 font-mono text-zinc-300 font-bold focus:outline-none focus:ring-1 focus:ring-blue-500/50 transition-all [&::-webkit-inner-spin-button]:appearance-none"
+                        placeholder={details?.targetPrice?.toString() || '0.00'}
+                        step="any"
+                      />
+                      {customPrice !== '' && (
+                         <button onClick={() => setCustomPrice('')} className="absolute right-[-20px] top-1.5 opacity-50 hover:opacity-100 transition-opacity">
+                           <X className="w-4 h-4 text-zinc-400" />
+                         </button>
+                      )}
+                    </div>
                   </div>
                   <div className="flex justify-between text-[11px] text-zinc-500">
                     <div className="flex items-center gap-1">
@@ -1128,12 +1213,15 @@ export default function Home() {
                   timeline.map((h) => (
                     <div key={h.date} className="bg-zinc-950 p-3 rounded-xl border border-zinc-800/50 flex justify-between items-center transition-all hover:bg-zinc-900">
                       <div>
-                        <p className="text-[9px] font-bold text-zinc-200">{h.date}</p>
+                        <p className="text-[9px] font-bold text-zinc-200">{h.date} 23:50</p>
                         <p className="text-[8px] text-zinc-600 font-mono">РЦ: {h.settlePrice}</p>
                       </div>
-                      <p className={cn("text-[11px] font-black font-mono", h.dailyVM > 0 ? "text-emerald-500" : h.dailyVM < 0 ? "text-rose-500" : "text-zinc-600")}>
-                        {h.dailyVM > 0 ? '+' : ''}{Math.round(h.dailyVM)} ₽
-                      </p>
+                      <div className="text-right">
+                        <p className={cn("text-[11px] font-black font-mono", h.dailyVM > 0 ? "text-emerald-500" : h.dailyVM < 0 ? "text-rose-500" : "text-zinc-600")}>
+                          {h.dailyVM > 0 ? '+' : ''}{formatMoney(h.dailyVM)} ₽
+                        </p>
+                        <p className="text-[8px] text-zinc-500 font-medium">уже зачислено</p>
+                      </div>
                     </div>
                   ))
                 ) : (

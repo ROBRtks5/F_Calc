@@ -4,6 +4,7 @@ import './globals.css'; // Global styles
 export const metadata: Metadata = {
   title: 'VM.MOEX | Калькулятор вариационной маржи',
   description: 'Профессиональный калькулятор ВМ для Московской Биржи (ETS 2026)',
+  manifest: '/manifest.json',
 };
 
 export const viewport = {
