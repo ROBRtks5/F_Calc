@@ -2,7 +2,7 @@ import type {Metadata} from 'next';
 import './globals.css'; // Global styles
 
 export const metadata: Metadata = {
-  title: 'VM.MOEX | Калькулятор вариационной маржи',
+  title: 'FC MOEX | Калькулятор маржи',
   description: 'Профессиональный калькулятор ВМ для Московской Биржи (ETS 2026)',
   manifest: '/manifest.json',
 };

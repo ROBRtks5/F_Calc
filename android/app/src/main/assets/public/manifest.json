@@ -1,7 +1,7 @@
 {
-  "name": "F.calc",
-  "short_name": "F.calc",
-  "description": "Калькулятор фьючерсов и маржи MOEX",
+  "name": "FC MOEX",
+  "short_name": "FC MOEX",
+  "description": "Терминал калькулятора фьючерсов и маржи MOEX 2026",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#09090b",

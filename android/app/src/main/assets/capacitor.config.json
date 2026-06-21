@@ -1,6 +1,6 @@
 {
 	"appId": "com.moex.vmcalc",
-	"appName": "F.calc",
+	"appName": "FC MOEX",
 	"webDir": "out",
 	"plugins": {
 		"SplashScreen": {

@@ -2,7 +2,7 @@ import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.moex.vmcalc',
-  appName: 'F.calc',
+  appName: 'FC MOEX',
   webDir: 'out',
   plugins: {
     SplashScreen: {
