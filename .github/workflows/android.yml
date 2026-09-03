@@ -23,11 +23,11 @@ jobs:
         with:
           node-version: 22
 
-      - name: Set up JDK 21
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '17'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -35,20 +35,19 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Sync Capacitor Android
+      - name: Prepare Web Assets & Sync Capacitor Android
         run: |
+          mkdir -p out
           if [ -d "android/app/src/main/assets/public" ]; then
-            echo "Pre-built web assets exist, updating plugins..."
-            npx cap update android
-          else
-            npx cap sync android
+            cp -r android/app/src/main/assets/public/* out/ 2>/dev/null || true
           fi
+          npx cap sync android
 
       - name: Build Android APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace --no-daemon
+          ./gradlew assembleDebug --stacktrace --info --no-daemon
 
       - name: Copy & Rename APK
         run: |
