@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { createPortal } from 'react-dom';
 
 export const Tooltip = ({ title, content, children }: { title: string, content: string, children: React.ReactNode }) => {

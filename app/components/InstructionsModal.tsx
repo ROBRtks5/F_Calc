@@ -1,5 +1,5 @@
 'use client';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { X, BookOpen, Clock, Activity, Coins, ShieldAlert } from 'lucide-react';
 
 interface Props {
@@ -50,29 +50,54 @@ export function InstructionsModal({ isOpen, onClose }: Props) {
                 <h3 className="text-sm font-bold uppercase text-zinc-400 flex items-center gap-2">
                   <Clock className="w-4 h-4" /> Единая Торговая Сессия (ЕТС) и Клиринг
                 </h3>
-                <div className="bg-zinc-950 p-4 rounded-2xl border border-zinc-900">
-                  <ul className="space-y-4 text-sm text-zinc-300">
-                    <li className="flex flex-col sm:flex-row gap-2 sm:gap-4">
-                      <span className="text-emerald-500 font-black w-28">09:00–19:00</span> 
-                      <span><strong>Дневная торговая сессия.</strong> Непрерывные торги. Дневного клиринга нет. ВМ пересчитывается в реальном времени.</span>
-                    </li>
-                    <li className="flex flex-col sm:flex-row gap-2 sm:gap-4">
-                      <span className="text-amber-400 font-black w-28">19:00</span> 
-                      <span><strong>Фиксация РЦ и курсов.</strong> Определение Расчетной Цены и индикативных курсов. Торги НЕ останавливаются, списаний нет.</span>
-                    </li>
-                    <li className="flex flex-col sm:flex-row gap-2 sm:gap-4">
-                      <span className="text-blue-400 font-black w-28">19:00–23:50</span> 
-                      <span><strong>Вечерняя торговая сессия.</strong> Торги продолжаются. Оценка результатов ведется от зафиксированной в 19:00 РЦ.</span>
-                    </li>
-                    <li className="flex flex-col sm:flex-row gap-2 sm:gap-4">
-                      <span className="text-rose-500 font-black w-28">23:50–00:30</span> 
-                      <span><strong>Единственный клиринг.</strong> Технологическая пауза. Окончательное списание/зачисление ВМ, фандинга и комиссий на счет.</span>
-                    </li>
-                    <li className="flex flex-col sm:flex-row gap-2 sm:gap-4">
-                      <span className="text-zinc-500 font-black w-28">00:30–08:50</span> 
-                      <span><strong>Ночной перерыв.</strong> Торги закрыты до открывающего аукциона.</span>
-                    </li>
-                  </ul>
+                <div className="bg-zinc-950 p-4 rounded-2xl border border-zinc-900 space-y-4">
+                  <div className="space-y-3">
+                    <p className="text-xs font-black uppercase text-blue-400 tracking-wider">Будние дни (Пн – Пт):</p>
+                    <ul className="space-y-2.5 text-sm text-zinc-300">
+                      <li className="flex flex-col sm:flex-row gap-1.5 sm:gap-4">
+                        <span className="text-cyan-400 font-mono font-black shrink-0 w-32">06:50–07:00</span> 
+                        <span><strong>Аукцион открытия.</strong> Сбор заявок перед утренней сессией.</span>
+                      </li>
+                      <li className="flex flex-col sm:flex-row gap-1.5 sm:gap-4">
+                        <span className="text-sky-400 font-mono font-black shrink-0 w-32">07:00–10:00</span> 
+                        <span><strong>Утренняя сессия.</strong> Ранние торги, синхронизированные с фондовым рынком с 07:00 утра.</span>
+                      </li>
+                      <li className="flex flex-col sm:flex-row gap-1.5 sm:gap-4">
+                        <span className="text-emerald-400 font-mono font-black shrink-0 w-32">10:00–19:00</span> 
+                        <span><strong>Основная дневная сессия.</strong> Непрерывные торги. Дневного клиринга (14:00) нет. ВМ пересчитывается онлайн.</span>
+                      </li>
+                      <li className="flex flex-col sm:flex-row gap-1.5 sm:gap-4">
+                        <span className="text-amber-400 font-mono font-black shrink-0 w-32">19:00</span> 
+                        <span><strong>Фиксация РЦ и курсов.</strong> Определение Расчетной Цены дня и индикативных курсов. Торги НЕ останавливаются.</span>
+                      </li>
+                      <li className="flex flex-col sm:flex-row gap-1.5 sm:gap-4">
+                        <span className="text-blue-400 font-mono font-black shrink-0 w-32">19:00–23:50</span> 
+                        <span><strong>Вечерняя торговая сессия.</strong> Торги продолжаются от зафиксированной в 19:00 Расчетной Цены (РЦ).</span>
+                      </li>
+                      <li className="flex flex-col sm:flex-row gap-1.5 sm:gap-4">
+                        <span className="text-rose-400 font-mono font-black shrink-0 w-32">23:50–00:30</span> 
+                        <span><strong>Единственный клиринг дня.</strong> Технологическая пауза. Окончательное списание/зачисление ВМ, фандинга и комиссий на счет.</span>
+                      </li>
+                      <li className="flex flex-col sm:flex-row gap-1.5 sm:gap-4">
+                        <span className="text-zinc-500 font-mono font-black shrink-0 w-32">00:30–06:50</span> 
+                        <span><strong>Ночной перерыв.</strong> Торги закрыты до открывающего аукциона в 06:50.</span>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div className="pt-3 border-t border-zinc-900 space-y-3">
+                    <p className="text-xs font-black uppercase text-amber-400 tracking-wider">Выходные дни (Сб, Вс — ДСВД):</p>
+                    <ul className="space-y-2 text-sm text-zinc-300">
+                      <li className="flex flex-col sm:flex-row gap-1.5 sm:gap-4">
+                        <span className="text-amber-400 font-mono font-black shrink-0 w-32">09:50–10:00</span>
+                        <span><strong>Аукцион открытия</strong> дополнительной сессии выходного дня.</span>
+                      </li>
+                      <li className="flex flex-col sm:flex-row gap-1.5 sm:gap-4">
+                        <span className="text-emerald-400 font-mono font-black shrink-0 w-32">10:00–19:00</span>
+                        <span><strong>Сессия выходного дня (ДСВД).</strong> Торги основными фьючерсами. Итоги зачисляются в клиринг следующего рабочего дня.</span>
+                      </li>
+                    </ul>
+                  </div>
                 </div>
               </section>
 

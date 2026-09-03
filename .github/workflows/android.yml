@@ -29,13 +29,16 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Install dependencies
         run: npm install
 
       - name: Sync Capacitor Android
         run: |
-          if [ -f android/app/src/main/assets/public/index.html ]; then
-            echo "Pre-built web assets exist in android/app/src/main/assets/public, updating plugins..."
+          if [ -d "android/app/src/main/assets/public" ]; then
+            echo "Pre-built web assets exist, updating plugins..."
             npx cap update android
           else
             npx cap sync android
@@ -45,11 +48,7 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          if ! unzip -t gradle/wrapper/gradle-wrapper.jar >/dev/null 2>&1; then
-            echo "Refreshing gradle-wrapper.jar..."
-            curl -sL https://raw.githubusercontent.com/gradle/gradle/v8.14.3/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
-          fi
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug --stacktrace --no-daemon
 
       - name: Copy & Rename APK
         run: |

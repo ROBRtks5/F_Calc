@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Search, Copy, Check, TrendingUp, RefreshCw, AlertTriangle, Info, Plus, Trash2, HelpCircle, X, ChevronDown, ChevronUp, Sparkles, Layers, Database, Calendar, Filter, ArrowUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 
 import { Tooltip } from './components/Tooltip';
 import { TradeCard } from './components/TradeCard';
@@ -174,7 +174,7 @@ export default function Home() {
     }
   }, []);
 
-  // Save trades on change
+  // Save trades to localStorage on change
   useEffect(() => {
     try {
       if (trades.length > 0) {
@@ -194,25 +194,40 @@ export default function Home() {
     const d = new Date(timestamp);
     const mskMs = d.getTime() + (3 * 3600 * 1000) + (d.getTimezoneOffset() * 60 * 1000);
     const msk = new Date(mskMs);
-    const day = msk.getDay();
+    const day = msk.getDay(); // 0 = Sunday, 6 = Saturday
     const isWeekend = day === 0 || day === 6;
     const hours = msk.getHours();
     const mins = msk.getMinutes();
     const totalMinutes = hours * 60 + mins;
 
-    if (totalMinutes >= 540 && totalMinutes < 1130) {
-      return { id: 'main_session', name: isWeekend ? 'Торги выходного дня (09:00 - 18:50)' : 'Основная сессия (09:00 - 18:50)', isTrading: true };
+    // Weekend schedule (ДСВД)
+    if (isWeekend) {
+      if (totalMinutes >= 590 && totalMinutes < 600) {
+        return { id: 'weekend_auction', name: 'Аукцион открытия ДСВД (09:50 - 10:00)', isTrading: false };
+      }
+      if (totalMinutes >= 600 && totalMinutes < 1140) {
+        return { id: 'weekend_session', name: 'Сессия выходного дня (10:00 - 19:00)', isTrading: true };
+      }
+      return { id: 'weekend_closed', name: 'Выходной день (Торги закрыты)', isTrading: false };
     }
-    if (totalMinutes >= 1130 && totalMinutes < 1145) {
-      return { id: 'evening_clearing', name: isWeekend ? 'Тех. перерыв (18:50 - 19:05)' : 'Промежуточный клиринг (18:50 - 19:05)', isTrading: false };
+
+    // Weekday schedule (Пн - Пт)
+    if (totalMinutes >= 410 && totalMinutes < 420) {
+      return { id: 'morning_auction', name: 'Аукцион открытия (06:50 - 07:00)', isTrading: false };
     }
-    if (totalMinutes >= 1145 && totalMinutes < 1430) {
-      return { id: 'evening_session', name: isWeekend ? 'Торги выходного дня (19:05 - 23:50)' : 'Вечерняя сессия (19:05 - 23:50)', isTrading: true };
+    if (totalMinutes >= 420 && totalMinutes < 600) {
+      return { id: 'morning_session', name: 'Утренняя сессия (07:00 - 10:00)', isTrading: true };
+    }
+    if (totalMinutes >= 600 && totalMinutes < 1140) {
+      return { id: 'main_session', name: 'Основная дневная сессия (10:00 - 19:00)', isTrading: true };
+    }
+    if (totalMinutes >= 1140 && totalMinutes < 1430) {
+      return { id: 'evening_session', name: 'Вечерняя сессия (19:00 - 23:50)', isTrading: true };
     }
     if (totalMinutes >= 1430 || totalMinutes < 30) {
-      return { id: 'clearing', name: isWeekend ? 'Тех. перерыв (23:50 - 00:30)' : 'Основной клиринг (23:50 - 00:30)', isTrading: false };
+      return { id: 'clearing', name: 'Единственный клиринг (23:50 - 00:30)', isTrading: false };
     }
-    return { id: 'planned', name: 'Межсессионный перерыв', isTrading: false };
+    return { id: 'night_break', name: 'Ночной перерыв (00:30 - 06:50)', isTrading: false };
   }, [now]);
 
   const isStale = useMemo(() => {
@@ -386,13 +401,6 @@ export default function Home() {
     load();
     return () => { mounted = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Persist trades to localStorage whenever updated
-  useEffect(() => {
-    try {
-      localStorage.setItem('moex_trades_v2', JSON.stringify(trades));
-    } catch {}
-  }, [trades]);
 
   // Auto-extend history if trades go further back than current loaded history
   useEffect(() => {
@@ -818,7 +826,7 @@ export default function Home() {
   };
 
   const getNextClearingTimeText = () => {
-    return 'Сегодня 23:50 (Вечерний клиринг)';
+    return 'Сегодня 23:50 (Единственный клиринг дня)';
   };
 
   return (

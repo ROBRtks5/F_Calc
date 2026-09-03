@@ -17,7 +17,7 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  transpilePackages: ['motion', 'framer-motion'],
+  transpilePackages: ['motion'],
 };
 
 export default nextConfig;

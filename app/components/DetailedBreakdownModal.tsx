@@ -1,5 +1,5 @@
 'use client';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'motion/react';
 import { X, FileText, Calculator, Wallet, HelpCircle } from 'lucide-react';
 import { Tooltip } from './Tooltip';
 import { cn } from '@/lib/utils';
