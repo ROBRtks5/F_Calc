@@ -2,6 +2,10 @@
 	"appId": "com.moex.vmcalc",
 	"appName": "FC MOEX",
 	"webDir": "out",
+	"server": {
+		"androidScheme": "https",
+		"cleartext": true
+	},
 	"plugins": {
 		"SplashScreen": {
 			"launchShowDuration": 1500,

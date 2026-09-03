@@ -3,7 +3,7 @@ import { CapacitorConfig } from '@capacitor/cli';
 const config: CapacitorConfig = {
   appId: 'com.moex.vmcalc',
   appName: 'FC MOEX',
-  webDir: 'public',
+  webDir: 'out',
   server: {
     androidScheme: 'https',
     cleartext: true,
