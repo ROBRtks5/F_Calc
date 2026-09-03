@@ -1,10 +1,10 @@
-name: Build & Release Android APK
+name: Android Build & Release
 
 on:
   push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 permissions:
@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -35,12 +36,15 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Prepare Web Assets & Sync Capacitor Android
+      - name: Build Next.js & Prepare Web Assets
         run: |
+          npm run build
+          rm -rf out
           mkdir -p out
-          if [ -d "android/app/src/main/assets/public" ]; then
-            cp -r android/app/src/main/assets/public/* out/ 2>/dev/null || true
-          fi
+          cp -r .next/server/app/* out/
+          mkdir -p out/_next
+          cp -r .next/static out/_next/ 2>/dev/null || true
+          cp -r public/* out/ 2>/dev/null || true
           npx cap sync android
 
       - name: Build Android APK
@@ -59,22 +63,20 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: FC-MOEX-Calculator-APK
-          path: ./release-output/FC-MOEX-Calculator.apk
-          retention-days: 30
+          path: release-output/FC-MOEX-Calculator.apk
+          if-no-files-found: error
 
       - name: Create or Update GitHub Release
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
-          tag_name: latest-apk
-          name: "FC MOEX Android App (Latest Release)"
+          tag_name: v${{ github.run_number }}
+          name: FC MOEX Android Release v${{ github.run_number }}
           body: |
-            📱 **Готовый установочный APK-файл для Android**
-            
-            - Нажмите на `FC-MOEX-Calculator.apk` ниже, чтобы скачать на телефон.
-            - При установке подтвердите «Разрешить установку из этого источника».
-            - Приложение готово к использованию!
-          files: ./release-output/FC-MOEX-Calculator.apk
+            Automated APK build from commit ${{ github.sha }}.
+            - FC MOEX Calculator
+            - Built with Capacitor 8 & Android SDK 35 (Java 21)
+          files: release-output/FC-MOEX-Calculator.apk
           draft: false
           prerelease: false
         env:
