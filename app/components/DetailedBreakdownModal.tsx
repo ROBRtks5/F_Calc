@@ -1,5 +1,5 @@
 'use client';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { X, FileText, Calculator, Wallet, HelpCircle } from 'lucide-react';
 import { Tooltip } from './Tooltip';
 import { cn } from '@/lib/utils';
@@ -80,7 +80,7 @@ export function DetailedBreakdownModal({ isOpen, onClose, marketData, calculatio
               <div className="bg-black border border-zinc-900 rounded-3xl overflow-hidden">
                 <div className="bg-zinc-900/50 p-4 border-b border-zinc-900">
                   <h3 className="text-sm font-bold uppercase text-white flex items-center gap-2">
-                    <Calculator className="w-4 h-4 text-emerald-500" /> Текущая сессия к клирингу (23:50)
+                    <Calculator className="w-4 h-4 text-emerald-500" /> Текущая сессия к клирингу (23:50 MSK)
                   </h3>
                 </div>
                 <div className="flex flex-col">
@@ -125,7 +125,7 @@ export function DetailedBreakdownModal({ isOpen, onClose, marketData, calculatio
                   <div className="p-4 bg-zinc-900/20 flex flex-col sm:flex-row sm:justify-between items-start sm:items-center gap-3">
                     <div className="flex-1">
                        <p className="font-black text-white uppercase text-sm">Итого к зачислению</p>
-                       <p className="text-[11px] text-zinc-500 mt-1.5 leading-relaxed">Прогноз поступлений в сегодняшний клиринг (23:50)</p>
+                       <p className="text-[11px] text-zinc-500 mt-1.5 leading-relaxed">Прогноз поступлений в клиринг (23:50 MSK)</p>
                     </div>
                     <div className={cn("font-mono font-black text-2xl tracking-tighter text-right", pending > 0 ? "text-emerald-500" : pending < 0 ? "text-rose-500" : "text-zinc-300")}>
                       {pending > 0 ? '+' : ''}{Math.round(pending).toLocaleString('ru-RU')} ₽

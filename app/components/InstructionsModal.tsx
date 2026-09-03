@@ -1,5 +1,5 @@
 'use client';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { X, BookOpen, Clock, Activity, Coins, ShieldAlert } from 'lucide-react';
 
 interface Props {
@@ -53,16 +53,24 @@ export function InstructionsModal({ isOpen, onClose }: Props) {
                 <div className="bg-zinc-950 p-4 rounded-2xl border border-zinc-900">
                   <ul className="space-y-4 text-sm text-zinc-300">
                     <li className="flex flex-col sm:flex-row gap-2 sm:gap-4">
-                      <span className="text-emerald-500 font-black w-16">08:50</span> 
-                      <span>Старт торгов. Вариационная маржа пересчитывается по текущей рыночной цене (Live).</span>
+                      <span className="text-emerald-500 font-black w-28">09:00–19:00</span> 
+                      <span><strong>Дневная торговая сессия.</strong> Непрерывные торги. Дневного клиринга нет. ВМ пересчитывается в реальном времени.</span>
                     </li>
                     <li className="flex flex-col sm:flex-row gap-2 sm:gap-4">
-                      <span className="text-amber-500 font-black w-16">19:00</span> 
-                      <span>Начало вечерней сессии. Сделки, совершенные после 19:00, переносятся на следующий торговый день для расчетов ВМ. Фиксируются промежуточные цены.</span>
+                      <span className="text-amber-400 font-black w-28">19:00</span> 
+                      <span><strong>Фиксация РЦ и курсов.</strong> Определение Расчетной Цены и индикативных курсов. Торги НЕ останавливаются, списаний нет.</span>
                     </li>
                     <li className="flex flex-col sm:flex-row gap-2 sm:gap-4">
-                      <span className="text-rose-500 font-black w-16">23:50</span> 
-                      <span><strong>Единственный основной клиринг 2026 года.</strong> Торги останавливаются на 40 минут. Биржа фиксирует <em>Расчетную Цену (РЦ)</em>. Начисляется или списывается реальный финансовый результат на ваш брокерский счет. В этот момент списывается/начисляется фандинг.</span>
+                      <span className="text-blue-400 font-black w-28">19:00–23:50</span> 
+                      <span><strong>Вечерняя торговая сессия.</strong> Торги продолжаются. Оценка результатов ведется от зафиксированной в 19:00 РЦ.</span>
+                    </li>
+                    <li className="flex flex-col sm:flex-row gap-2 sm:gap-4">
+                      <span className="text-rose-500 font-black w-28">23:50–00:30</span> 
+                      <span><strong>Единственный клиринг.</strong> Технологическая пауза. Окончательное списание/зачисление ВМ, фандинга и комиссий на счет.</span>
+                    </li>
+                    <li className="flex flex-col sm:flex-row gap-2 sm:gap-4">
+                      <span className="text-zinc-500 font-black w-28">00:30–08:50</span> 
+                      <span><strong>Ночной перерыв.</strong> Торги закрыты до открывающего аукциона.</span>
                     </li>
                   </ul>
                 </div>
@@ -80,7 +88,7 @@ export function InstructionsModal({ isOpen, onClose }: Props) {
                   ВМ = (Цена_Текущая - Цена_Входа) / Шаг × Стоимость_Шага × Лоты
                 </div>
                 <p className="text-zinc-300 text-sm leading-relaxed">
-                  <strong>Важное правило биржи:</strong> если вы перенесли позицию со вчерашнего дня (дождались клиринга 23:50), то новая ВМ считается уже <strong>НЕ от вашей цены входа</strong>, а от Расчетной Цены (РЦ) прошлого вечера. 
+                  <strong>Важное правило биржи:</strong> если вы перенесли позицию с прошлого дня (прошли единственный клиринг 23:50), то новая ВМ считается уже <strong>НЕ от вашей цены входа</strong>, а от зафиксированной Расчетной Цены (РЦ) предшествующего дня. 
                 </p>
               </section>
 
@@ -89,15 +97,15 @@ export function InstructionsModal({ isOpen, onClose }: Props) {
                   <ShieldAlert className="w-4 h-4" /> Вечные Фьючерсы и Фандинг
                 </h3>
                 <p className="text-zinc-300 text-sm leading-relaxed">
-                  Вечные фьючерсы (USDRUBF, IMOEXF) не имеют даты экспирации. Для удержания цены фьючерса возле базового актива используется механизм <strong>Фандинга (Funding)</strong>.
+                  Вечные фьючерсы (USDRUBF, IMOEXF, GLDRUBF, RGBIF, SPYF, BTCF) не имеют даты экспирации. Для удержания цены фьючерса возле базового актива используется механизм <strong>Фандинга (Funding)</strong>.
                 </p>
                 <ul className="list-disc pl-5 text-zinc-300 text-sm leading-relaxed space-y-1">
-                  <li>Начисляется/списывается <strong>один раз в день в клиринг (23:50)</strong>.</li>
+                  <li>Начисляется/списывается <strong>один раз в день во время единственного клиринга (23:50–00:30)</strong>.</li>
                   <li>Если фандинг <strong>положительный (+)</strong> — лонгисты (Покупка) платят шортистам (Продажа).</li>
                   <li>Если фандинг <strong>отрицательный (-)</strong> — шортисты платят лонгистам.</li>
                 </ul>
                 <p className="text-zinc-300 text-sm leading-relaxed">
-                  F.Calc автоматически собирает ставку фандинга за текущие стуки из API Мосбиржи и вшивает ее в предстоящий клиринг. Вы также можете поправить значение фандинга вручную в панели расчетов.
+                  F.Calc автоматически собирает ставку фандинга за текущие сутки из API Мосбиржи и вшивает ее в предстоящий клиринг. Вы также можете поправить значение фандинга вручную в панели расчетов.
                 </p>
               </section>
 

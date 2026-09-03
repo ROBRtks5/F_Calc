@@ -1,0 +1,79 @@
+name: Build & Release Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Sync Capacitor Android
+        run: |
+          if [ -f android/app/src/main/assets/public/index.html ]; then
+            echo "Pre-built web assets exist in android/app/src/main/assets/public, updating plugins..."
+            npx cap update android
+          else
+            npx cap sync android
+          fi
+
+      - name: Build Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Copy & Rename APK
+        run: |
+          mkdir -p release-output
+          find android/app/build/outputs/apk -name "*.apk" -exec cp {} ./release-output/FC-MOEX-Calculator.apk \;
+          ls -la ./release-output
+
+      - name: Upload APK to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FC-MOEX-Calculator-APK
+          path: ./release-output/FC-MOEX-Calculator.apk
+          retention-days: 30
+
+      - name: Create or Update GitHub Release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-apk
+          name: "FC MOEX Android App (Latest Release)"
+          body: |
+            📱 **Готовый установочный APK-файл для Android**
+            
+            - Нажмите на `FC-MOEX-Calculator.apk` ниже, чтобы скачать на телефон.
+            - При установке подтвердите «Разрешить установку из этого источника».
+            - Приложение готово к использованию!
+          files: ./release-output/FC-MOEX-Calculator.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

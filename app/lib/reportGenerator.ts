@@ -20,7 +20,27 @@ export function generateVMReport(
   validTrades: any[]
 ) {
   const { total, pending, settled, settledUnpaid, netPosition, details, timeline } = calculations;
-  
+  const uTicker = ticker.toUpperCase();
+  let currency = 'RUB';
+  let stepCostUsd: number | null = null;
+  let ik: number | null = null;
+
+  if (['RTS', 'RI'].some(x => uTicker.startsWith(x))) {
+    currency = 'USD'; stepCostUsd = 0.2;
+  } else if (['SILV', 'SLV', 'S1', 'SV'].some(x => uTicker.startsWith(x))) {
+    currency = 'USD'; stepCostUsd = 0.01;
+  } else if (['GOLD', 'GD'].some(x => uTicker.startsWith(x))) {
+    currency = 'USD'; stepCostUsd = 0.1;
+  } else if (['BR'].some(x => uTicker.startsWith(x))) {
+    currency = 'USD'; stepCostUsd = 0.1;
+  } else if (['NG'].some(x => uTicker.startsWith(x))) {
+    currency = 'USD'; stepCostUsd = 0.1;
+  } else if (['ED'].some(x => uTicker.startsWith(x))) {
+    currency = 'USD'; stepCostUsd = 0.01; 
+  } else {
+    currency = 'RUB';
+  }
+
   const minStepVal = details?.minStep || 1;
   const decimals = minStepVal.toString().includes('.') ? minStepVal.toString().split('.')[1].length : 0;
   const displayDecimals = Math.max(2, decimals);
@@ -52,27 +72,6 @@ export function generateVMReport(
   const fmtDateShort = (d: Date) => {
     return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth()+1).padStart(2, '0')}`;
   };
-
-  const uTicker = ticker.toUpperCase();
-  let currency = 'RUB';
-  let stepCostUsd: number | null = null;
-  let ik: number | null = null;
-
-  if (['RTS', 'RI'].some(x => uTicker.startsWith(x))) {
-    currency = 'USD'; stepCostUsd = 0.2;
-  } else if (['SILV', 'SLV', 'S1', 'SV'].some(x => uTicker.startsWith(x))) {
-    currency = 'USD'; stepCostUsd = 0.01;
-  } else if (['GOLD', 'GD'].some(x => uTicker.startsWith(x))) {
-    currency = 'USD'; stepCostUsd = 0.1;
-  } else if (['BR'].some(x => uTicker.startsWith(x))) {
-    currency = 'USD'; stepCostUsd = 0.1;
-  } else if (['NG'].some(x => uTicker.startsWith(x))) {
-    currency = 'USD'; stepCostUsd = 0.1;
-  } else if (['ED'].some(x => uTicker.startsWith(x))) {
-    currency = 'USD'; stepCostUsd = 0.01; 
-  } else {
-    currency = 'RUB';
-  }
   
   if (currency === 'USD' && details && details.stepPrice && stepCostUsd) {
       ik = details.stepPrice / stepCostUsd;
@@ -399,15 +398,15 @@ export function generateVMReport(
 
   // --- BAZA CONCEPTS ---
   let sectionConcepts = `БАЗОВЫЕ ПОНЯТИЯ\n`;
-  sectionConcepts += `1. Расчетная цена (РЦ) — официальный ориентир, который биржа фиксирует каждый будний день ровно в 19:00 МСК. Сделки, совершенные позже этого времени, относятся к следующему торговому дню, но в ночной клиринг переоцениваются по расчетной цене, зафиксированной в 19:00.\n`;
+  sectionConcepts += `1. Расчетная цена (РЦ) — официальный ориентир, который биржа фиксирует каждый будний день в 19:00 МСК. Сделки, совершенные позже этого времени, относятся к вечерней торговой сессии и переоцениваются от зафиксированной РЦ.\n`;
   
   let pointLabelForFormula = 'Шаг цены в рублях';
   if (currency !== 'RUB' && ik) {
-      sectionConcepts += `2. Индикативный курс — фиксируется также в 19:00 МСК. Он пересчитывает стоимость шага цены валютных и товарных контрактов в рубли, защищая счет от курсовых колебаний внутри ночи.\n`;
-      sectionConcepts += `Во время ночного клиринга (23:50 -> 00:30) зафиксированный за день итог окончательно проводится по счету (происходит физическое списание или начисление).\n\n`;
+      sectionConcepts += `2. Индикативный курс — фиксируется в 19:00 МСК. Он пересчитывает стоимость шага цены валютных и товарных контрактов в рубли.\n`;
+      sectionConcepts += `Во время единственного клиринга (23:50 -> 00:30) зафиксированный за день итог окончательно проводится по счету (происходит физическое списание или начисление ВМ и фандинга).\n\n`;
       pointLabelForFormula = 'Стоимость пункта';
   } else {
-      sectionConcepts += `Во время ночного клиринга (23:50 -> 00:30) зафиксированный за день итог окончательно проводится по счету (происходит физическое списание или начисление).\n\n`;
+      sectionConcepts += `Во время единственного клиринга (23:50 -> 00:30) зафиксированный за день итог окончательно проводится по счету (происходит физическое списание или начисление ВМ и фандинга).\n\n`;
   }
 
   // --- FORMULAS ---
@@ -460,7 +459,7 @@ export function generateVMReport(
       }
   }
 
-  let nkcText = `\nТекущий плавающий результат окончательно зафиксируется сегодня в 19:00 МСК и запишется на баланс в ночной клиринг по официальным данным Московской биржи (НКЦ).\n`;
+  let nkcText = `\nТекущий плавающий результат зафиксируется в единственный клиринг (23:50–00:30 МСК) и запишется на баланс по официальным данным Московской биржи (НКЦ).\n`;
   let nkcTextClosed = `\nИтоговый финансовый результат зафиксирован по официальным данным Московской биржи (НКЦ).\n`;
 
   if (hasAbsurdPrices) {

@@ -5,6 +5,5 @@ export interface Trade {
   date: string; // YYYY-MM-DD
   type: PositionType;
   price: string;
-  priceMode?: 'points' | 'rubles';
   lots: number;
 }

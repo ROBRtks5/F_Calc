@@ -1,17 +1,19 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { Search, Copy, Check, TrendingUp, RefreshCw, AlertTriangle, Info, Plus, Trash2, HelpCircle, X } from 'lucide-react';
+import { Search, Copy, Check, TrendingUp, RefreshCw, AlertTriangle, Info, Plus, Trash2, HelpCircle, X, ChevronDown, ChevronUp, Sparkles, Layers, Database, Calendar, Filter, ArrowUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 import { Tooltip } from './components/Tooltip';
 import { TradeCard } from './components/TradeCard';
-import { Trade, PositionType } from './components/types';
+import { Trade } from './components/types';
 import { SplashScreen } from './components/SplashScreen';
 import { InstructionsModal } from './components/InstructionsModal';
 import { DetailedBreakdownModal } from './components/DetailedBreakdownModal';
 import { generateVMReport } from './lib/reportGenerator';
+import { getPreloadedHistory, normalizeDateToISO, MoexHistoryRecord } from './lib/moexData';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 const formatMoney = (val: number) => {
   return (+val).toLocaleString('ru-RU', { 
@@ -20,30 +22,10 @@ const formatMoney = (val: number) => {
   });
 };
 
-// Helper for API resilience
-async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 2, backoff = 500): Promise<Response> {
-  try {
-    const res = await fetch(url, options);
-    if (res.status === 429 && retries > 0) {
-      await new Promise(r => setTimeout(r, backoff));
-      return fetchWithRetry(url, options, retries - 1, backoff * 2);
-    }
-    return res;
-  } catch (err: any) {
-    if (err.name === 'AbortError') throw err;
-    if (retries > 0) {
-      await new Promise(r => setTimeout(r, backoff));
-      return fetchWithRetry(url, options, retries - 1, backoff * 2);
-    }
-    throw err;
-  }
-}
-
-import { Haptics, ImpactStyle } from '@capacitor/haptics';
-
 const getMoexSessionDateStr = (): string => {
-  const moscowTimeStr = new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"});
-  const mskNow = new Date(moscowTimeStr);
+  const now = new Date();
+  const mskMs = now.getTime() + (3 * 3600 * 1000) + (now.getTimezoneOffset() * 60 * 1000);
+  const mskNow = new Date(mskMs);
   const sessionDate = new Date(mskNow);
   if (mskNow.getHours() >= 19) sessionDate.setDate(sessionDate.getDate() + 1);
   if (sessionDate.getDay() === 6) sessionDate.setDate(sessionDate.getDate() + 2);
@@ -54,37 +36,95 @@ const getMoexSessionDateStr = (): string => {
   return `${year}-${month}-${day}`;
 };
 
+const DEFAULT_SPECS: Record<string, { 
+  ticker: string;
+  shortName: string;
+  secName: string;
+  last: number; 
+  prevSettlePrice: number; 
+  settlePrice: number; 
+  stepPrice: number; 
+  minStep: number;
+  multiplier: number;
+  funding: number;
+  isPerp: boolean;
+  source: string;
+}> = {
+  'USDRUBF': { ticker: 'USDRUBF', shortName: 'USDRUBF', secName: 'Бессрочный фьючерс USD/RUB', last: 87.10, prevSettlePrice: 86.75, settlePrice: 86.75, stepPrice: 10, minStep: 0.01, multiplier: 1000, funding: 0, isPerp: true, source: 'MOEX FORTS' },
+  'EURRUBF': { ticker: 'EURRUBF', shortName: 'EURRUBF', secName: 'Бессрочный фьючерс EUR/RUB', last: 96.20, prevSettlePrice: 95.80, settlePrice: 95.80, stepPrice: 10, minStep: 0.01, multiplier: 1000, funding: 0, isPerp: true, source: 'MOEX FORTS' },
+  'CNYRUBF': { ticker: 'CNYRUBF', shortName: 'CNYRUBF', secName: 'Бессрочный фьючерс CNY/RUB', last: 12.10, prevSettlePrice: 12.05, settlePrice: 12.05, stepPrice: 10, minStep: 0.001, multiplier: 10000, funding: 0, isPerp: true, source: 'MOEX FORTS' },
+  'IMOEXF': { ticker: 'IMOEXF', shortName: 'IMOEXF', secName: 'Бессрочный фьючерс на Индекс Мосбиржи', last: 2800, prevSettlePrice: 2795, settlePrice: 2795, stepPrice: 1, minStep: 1, multiplier: 1, funding: 0, isPerp: true, source: 'MOEX FORTS' },
+  'GLDRUBF': { ticker: 'GLDRUBF', shortName: 'GLDRUBF', secName: 'Бессрочный фьючерс на Золото в рублях', last: 7900, prevSettlePrice: 7850, settlePrice: 7850, stepPrice: 10, minStep: 0.1, multiplier: 100, funding: 0, isPerp: true, source: 'MOEX FORTS' },
+  'RGBIF': { ticker: 'RGBIF', shortName: 'RGBIF', secName: 'Бессрочный фьючерс на Индекс Гособлигаций RGBI', last: 104.50, prevSettlePrice: 104.20, settlePrice: 104.20, stepPrice: 10, minStep: 0.01, multiplier: 1000, funding: 0, isPerp: true, source: 'MOEX FORTS' },
+  'SBERF': { ticker: 'SBERF', shortName: 'SBERF', secName: 'Бессрочный фьючерс на Акции Сбербанка', last: 280.00, prevSettlePrice: 278.50, settlePrice: 278.50, stepPrice: 1, minStep: 0.01, multiplier: 100, funding: 0, isPerp: true, source: 'MOEX FORTS' },
+};
+
 export default function Home() {
-  const [ticker, setTicker] = useState('');
-  const [allInstruments, setAllInstruments] = useState<{ list: { ticker: string, name: string, uid?: string, type?: string, source?: string, realExchange?: string, classCode?: string }[], synced: boolean }>({ list: [], synced: false });
-  
+  const [ticker, setTicker] = useState<string>('USDRUBF');
+  const [allInstruments, setAllInstruments] = useState<{ list: { ticker: string, name: string, uid?: string, type?: string, source?: string }[], synced: boolean }>({ list: [], synced: false });
   const [isSyncing, setIsSyncing] = useState(false);
-  const isSyncingRef = useRef(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const [trades, setTrades] = useState<Trade[]>([]);
+  
+  const [trades, setTrades] = useState<Trade[]>([
+    {
+      id: '1',
+      date: '2025-10-24',
+      type: 'Long',
+      price: '80.97',
+      lots: 5
+    },
+    {
+      id: '2',
+      date: '2026-06-04',
+      type: 'Long',
+      price: '74.54',
+      lots: 1
+    }
+  ]);
+  
   const [funding, setFunding] = useState('');
   const [customPrice, setCustomPrice] = useState('');
+  const [isTimelineExpanded, setIsTimelineExpanded] = useState(false);
   
   const [marketData, setMarketData] = useState<{ 
+    ticker?: string,
+    shortName?: string,
+    secName?: string,
     last: number, 
     prevSettlePrice: number, 
     settlePrice: number, 
     stepPrice: number, 
     minStep: number,
     funding?: number,
+    isPerp?: boolean,
+    multiplier?: number,
     historyCount?: number,
     source?: string
-  } | null>(null);
-  const [historyStatus, setHistoryStatus] = useState<'idle' | 'loading' | 'success' | 'partial' | 'error'>('idle');
-  const [historyData, setHistoryData] = useState<any[] | null>(null);
+  } | null>(DEFAULT_SPECS['USDRUBF']);
+
+  const [historyStatus, setHistoryStatus] = useState<'idle' | 'loading' | 'success' | 'partial' | 'error'>('success');
+  const [historyData, setHistoryData] = useState<MoexHistoryRecord[] | null>(() => getPreloadedHistory('USDRUBF'));
+
   const [loading, setLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [lastUpdateTimestamp, setLastUpdateTimestamp] = useState<number | null>(null);
-  const [now, setNow] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(0);
   const [lastUpdateTime, setLastUpdateTime] = useState<string | null>(null);
   const [isInstructionsOpen, setIsInstructionsOpen] = useState(false);
   const [isDetailedBreakdownOpen, setIsDetailedBreakdownOpen] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearingVisibleCount, setClearingVisibleCount] = useState(20);
+  const [clearingFilter, setClearingFilter] = useState<'all' | 'swap' | 'profit' | 'loss'>('all');
+
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(prev => (prev === msg ? null : prev));
+    }, 4000);
+  }, []);
 
   const hapticFeedback = useCallback(async (strength: 'light' | 'medium' | 'heavy' = 'light') => {
     try {
@@ -92,7 +132,7 @@ export default function Home() {
         const style = strength === 'heavy' ? ImpactStyle.Heavy : strength === 'medium' ? ImpactStyle.Medium : ImpactStyle.Light;
         await Haptics.impact({ style });
       }
-    } catch (e) {
+    } catch {
       if (typeof window !== 'undefined' && navigator.vibrate) {
         const pattern = strength === 'heavy' ? [50, 30, 50] : strength === 'medium' ? [30] : [10];
         navigator.vibrate(pattern);
@@ -100,436 +140,320 @@ export default function Home() {
     }
   }, []);
 
-  // Removed syncInstruments from down below and defined here:
+  // Quick ticker history settlement map for auto-lookup in trades
+  const historyMap = useMemo(() => {
+    const map = new Map<string, number>();
+    if (historyData) {
+      for (const h of historyData) {
+        const d = normalizeDateToISO(h.tradeDate);
+        if (d && h.settlePrice > 0) {
+          map.set(d, h.settlePrice);
+        }
+      }
+    }
+    return map;
+  }, [historyData]);
+
+  // Sync instruments list
   const syncInstruments = useCallback(async () => {
-    if (isSyncingRef.current) return;
-    isSyncingRef.current = true;
     setIsSyncing(true);
     setError(null);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000);
-      
-      const url = `https://iss.moex.com/iss/engines/futures/markets/forts/securities.json?iss.only=securities&iss.meta=off&securities.columns=SECID,SHORTNAME,LATNAME`;
-      const res = await fetchWithRetry(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      if (!res.ok) throw new Error(`Ошибка синхронизации: ${res.status}`);
-      const data = await res.json();
-      
-      const moexSecurities = data.securities?.data || [];
-      const list = moexSecurities.map((row: any) => ({
-        ticker: row[0],
-        name: (row[1] || row[2] || '').slice(0, 50),
-        source: 'moex',
-        type: 'ФОРТС'
-      }));
-
-      setAllInstruments({ list, synced: true });
-      localStorage.setItem('moex_instruments', JSON.stringify(list));
-      hapticFeedback('medium');
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        setError('Превышено время ожидания синхронизации');
-      } else {
-        console.error(err);
-        setError('Ошибка синхронизации: ' + err.message);
+      const res = await fetch('/api/moex/securities');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.list && data.list.length > 0) {
+          setAllInstruments({ list: data.list, synced: true });
+          localStorage.setItem('moex_instruments', JSON.stringify(data.list));
+        }
       }
+    } catch (err: any) {
+      console.error('Failed to sync securities:', err);
     } finally {
       setIsSyncing(false);
-      isSyncingRef.current = false;
     }
-  }, [hapticFeedback]);
+  }, []);
 
+  // Save trades on change
   useEffect(() => {
-    let instruments: any[] = [];
-    const savedInstrumentsStr = localStorage.getItem('moex_instruments');
-    if (savedInstrumentsStr) {
-        try {
-            instruments = JSON.parse(savedInstrumentsStr);
-        } catch (e) {
-            console.error('Failed to parse saved instruments', e);
-        }
-    }
-    
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAllInstruments({ list: instruments, synced: instruments.length > 0 });
-
-    if (instruments.length === 0) {
-      // Auto-sync if nothing in storage
-      syncInstruments();
-    }
-
-    const savedTicker = localStorage.getItem('moex_last_ticker');
-    if (savedTicker) {
-        setTicker(savedTicker);
-    } else {
-        setTicker('SiM6');
-    }
-
-    const savedTradesStr = localStorage.getItem('moex_trades');
-    let parsedTrades: Trade[] | null = null;
-    if (savedTradesStr) {
-        try {
-            parsedTrades = JSON.parse(savedTradesStr);
-        } catch (e) {
-            console.error('Failed to parse saved trades', e);
-        }
-    }
-
-    if (parsedTrades && parsedTrades.length > 0) {
-        setTrades(parsedTrades);
-    } else {
-        setTrades([{
-            id: '1',
-            date: new Date().toISOString().split('T')[0],
-            type: 'Long',
-            price: '',
-            priceMode: 'rubles',
-            lots: 1
-        }]);
-    }
-
-    const savedMarketDataStr = localStorage.getItem('moex_market_data');
-    if (savedMarketDataStr) {
-        try {
-            setMarketData(JSON.parse(savedMarketDataStr));
-        } catch (e) {
-            console.error('Failed to parse saved market data', e);
-        }
-    }
-
-    const savedCustomPrice = localStorage.getItem('moex_custom_price');
-    if (savedCustomPrice) {
-        setCustomPrice(savedCustomPrice);
-    }
-  }, [syncInstruments]);
-
-  useEffect(() => {
-    localStorage.setItem('moex_trades', JSON.stringify(trades));
+    try {
+      if (trades.length > 0) {
+        localStorage.setItem('moex_trades_v2', JSON.stringify(trades));
+      }
+    } catch {}
   }, [trades]);
 
+  // Periodic clock for market session status
   useEffect(() => {
-    if (marketData) {
-      localStorage.setItem('moex_market_data', JSON.stringify(marketData));
-    }
-  }, [marketData]);
-
-  useEffect(() => {
-    localStorage.setItem('moex_custom_price', customPrice);
-  }, [customPrice]);
-
-  useEffect(() => {
-    if (ticker && ticker !== '') {
-      localStorage.setItem('moex_last_ticker', ticker);
-    }
-  }, [ticker]);
-
-  const isPerp = useMemo(() => {
-    const perpsPattern = /F$/;
-    const current = ticker.toUpperCase();
-    return perpsPattern.test(current) && current.length >= 5; // e.g. USDRUBF, IMOEXF, SBERF
-  }, [ticker]);
-
-
-  const getMarketSession = useCallback((now: Date = new Date()) => {
-    const moscowTimeStr = now.toLocaleString("en-US", {timeZone: "Europe/Moscow"});
-    const mskNow = new Date(moscowTimeStr);
-    const hours = mskNow.getHours();
-    const minutes = mskNow.getMinutes();
-    const timeVal = hours * 100 + minutes;
-
-    const dayOfWeek = mskNow.getDay();
-    const isWeekend = dayOfWeek === 6 || dayOfWeek === 0;
-
-    if (isWeekend) {
-      return {
-        phase: {
-          id: 'weekend',
-          name: 'Выходные (ДСВД)',
-          description: 'Дополнительная сессия выходного дня. Расчеты предварительные.'
-        }
-      };
-    }
-
-    if (timeVal >= 850 && timeVal < 1900) {
-      return {
-        phase: {
-          id: 'intraday',
-          name: 'Текущие торги',
-          description: 'Вариационная маржа считается по плавающим рыночным ценам.'
-        }
-      };
-    } else if (timeVal >= 1900 && timeVal < 2350) {
-      return {
-        phase: {
-          id: 'planned',
-          name: 'Ожидание клиринга (19:00-23:50)',
-          description: 'Основные цены зафиксированы. Идет вечерняя сессия.'
-        }
-      };
-    } else if (timeVal >= 2350 || timeVal < 850) {
-      return {
-        phase: {
-          id: 'post-clearing',
-          name: 'Ночная пауза',
-          description: 'Расчет ВМ за текущую сессию завершен.'
-        }
-      };
-    } else {
-      return {
-        phase: {
-          id: 'unknown',
-          name: 'Текущие торги',
-          description: 'Торги открыты.'
-        }
-      };
-    }
+    const interval = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(interval);
   }, []);
 
-  const getNextClearingTimeText = useCallback(() => {
-    const moscowTimeStr = new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"});
-    const mskNow = new Date(moscowTimeStr);
-    const dayOfWeek = mskNow.getDay();
-    const hours = mskNow.getHours();
-    const minutes = mskNow.getMinutes();
-    const timeVal = hours * 100 + minutes;
+  const marketPhase = useMemo(() => {
+    const timestamp = now || Date.now();
+    const d = new Date(timestamp);
+    const mskMs = d.getTime() + (3 * 3600 * 1000) + (d.getTimezoneOffset() * 60 * 1000);
+    const msk = new Date(mskMs);
+    const day = msk.getDay();
+    const isWeekend = day === 0 || day === 6;
+    const hours = msk.getHours();
+    const mins = msk.getMinutes();
+    const totalMinutes = hours * 60 + mins;
 
-    let targetDay = 'Сегодня';
-    let targetTime = '23:50';
-
-    if (dayOfWeek === 6 || dayOfWeek === 0) {
-        targetDay = 'След. раб. день';
-    } else if (dayOfWeek === 5 && timeVal >= 2350) {
-        targetDay = 'След. раб. день';
-    } else {
-        if (timeVal >= 2350) {
-            targetDay = 'Сегодня (вечер)';
-        } else {
-            targetDay = 'Сегодня';
-        }
+    if (totalMinutes >= 540 && totalMinutes < 1130) {
+      return { id: 'main_session', name: isWeekend ? 'Торги выходного дня (09:00 - 18:50)' : 'Основная сессия (09:00 - 18:50)', isTrading: true };
     }
-    return `${targetDay} 23:50`;
-  }, []);
-
-  const [session, setSession] = useState<{phase: any}>({
-    phase: {
-      id: 'intraday',
-      name: 'Загрузка...',
-      description: 'Определение торговой сессии...'
+    if (totalMinutes >= 1130 && totalMinutes < 1145) {
+      return { id: 'evening_clearing', name: isWeekend ? 'Тех. перерыв (18:50 - 19:05)' : 'Промежуточный клиринг (18:50 - 19:05)', isTrading: false };
     }
-  });
-
-  const { phase: marketPhase } = session;
-
-  const updateMarketSession = useCallback(() => {
-    setSession(getMarketSession());
-  }, [getMarketSession]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    updateMarketSession();
-    const timer = setInterval(() => {
-      updateMarketSession();
-    }, 60000); // Check every minute
-    
-    return () => clearInterval(timer);
-  }, [updateMarketSession]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 60000);
-    return () => clearInterval(timer);
-  }, []);
-
-
+    if (totalMinutes >= 1145 && totalMinutes < 1430) {
+      return { id: 'evening_session', name: isWeekend ? 'Торги выходного дня (19:05 - 23:50)' : 'Вечерняя сессия (19:05 - 23:50)', isTrading: true };
+    }
+    if (totalMinutes >= 1430 || totalMinutes < 30) {
+      return { id: 'clearing', name: isWeekend ? 'Тех. перерыв (23:50 - 00:30)' : 'Основной клиринг (23:50 - 00:30)', isTrading: false };
+    }
+    return { id: 'planned', name: 'Межсессионный перерыв', isTrading: false };
+  }, [now]);
 
   const isStale = useMemo(() => {
     if (!lastUpdateTimestamp || !now) return false;
-    // Data is stale if older than 5 minutes during trading hours
     return now - lastUpdateTimestamp > 5 * 60 * 1000;
   }, [lastUpdateTimestamp, now]);
 
   const filteredInstruments = useMemo(() => {
-    const t = ticker.toLowerCase();
-    // For MOEX tab, only show FORTS futures or moex source
+    const t = ticker.toLowerCase().trim();
+    if (!t) return allInstruments.list.slice(0, 8);
     return allInstruments.list.filter(i => 
-      (i.source === 'moex' || i.type === 'ФОРТС') &&
-      (i.ticker.toLowerCase().includes(t) || i.name.toLowerCase().includes(t))
+      i.ticker.toLowerCase().includes(t) || (i.name && i.name.toLowerCase().includes(t))
     ).slice(0, 8);
   }, [allInstruments.list, ticker]);
 
-  const selectInstrument = (inst: any) => {
-    hapticFeedback('light');
-    setTicker(inst.ticker);
-    localStorage.setItem('moex_last_ticker', inst.ticker);
-    setShowSuggestions(false);
-    fetchMarketData(inst.ticker);
-  };
+  // History fetcher with caching and preloaded fallbacks
+  const fetchHistoryOnly = useCallback(async (targetTicker: string, fromOverride?: string) => {
+    const sym = (targetTicker || 'USDRUBF').toUpperCase().trim();
+    if (!sym) return;
 
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
+    setHistoryLoading(true);
+    setHistoryStatus('loading');
 
-  const clearAllTrades = () => {
-    setShowClearConfirm(true);
-  };
-
-  const performClearAll = () => {
-    hapticFeedback('heavy');
-    setTrades([{
-      id: '1',
-      date: getMoexSessionDateStr(),
-      type: 'Long',
-      price: '',
-      priceMode: 'rubles',
-      lots: 1
-    }]);
-    setShowClearConfirm(false);
-  };
-
-  const abortControllerRef = useRef<AbortController | null>(null);
-
-
-  const fetchMarketData = useCallback(async (t: string) => {
-    if (!t) return;
-
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+    try {
+      const fromDate = fromOverride || '2023-01-01';
+      const histRes = await fetch(`/api/moex/history?ticker=${sym}&from=${fromDate}`);
+      if (histRes.ok) {
+        const histJson = await histRes.json();
+        if (histJson.history && histJson.history.length > 0) {
+          setHistoryData(histJson.history);
+          setHistoryStatus('success');
+          try {
+            localStorage.setItem(`moex_history_v4_${sym}`, JSON.stringify(histJson.history));
+          } catch {}
+          const swapCount = histJson.history.filter((x: any) => x.swapRate !== 0).length;
+          showToast(`MOEX ISS: загружено ${histJson.history.length} клирингов (свопов: ${swapCount})`);
+          return histJson.history;
+        }
+      }
+    } catch (err: any) {
+      console.error('History fetch error:', err);
+    } finally {
+      setHistoryLoading(false);
     }
-    abortControllerRef.current = new AbortController();
-    const signal = abortControllerRef.current.signal;
+
+    // Fallback to preloaded dataset if fetch didn't succeed
+    const preloaded = getPreloadedHistory(sym);
+    if (preloaded.length > 0) {
+      setHistoryData(preloaded);
+      setHistoryStatus('success');
+      showToast(`Использована встроенная база MOEX: ${preloaded.length} клирингов`);
+    } else {
+      setHistoryStatus('partial');
+    }
+    return null;
+  }, [showToast]);
+
+  // Main fetch function using server-side API proxy with parallel queries
+  const fetchMarketData = useCallback(async (targetTicker: string, overrideTrades?: Trade[]) => {
+    const sym = (targetTicker || 'USDRUBF').toUpperCase().trim();
+    if (!sym) return;
 
     setLoading(true);
     setError(null);
-    setHistoryStatus('loading');
-    
-    // Clear previous data to prevent race condition between old history and new market data
-    setHistoryData(null);
-    
+
+    // 1. Immediately provide preloaded history if available
+    const preloaded = getPreloadedHistory(sym);
+    if (preloaded.length > 0) {
+      setHistoryData(prev => (prev && prev.length > 0 ? prev : preloaded));
+      setHistoryStatus('success');
+    }
+
     try {
-      // Clear custom price on explicit refresh
-      setCustomPrice('');
-      
-      // 1. Fetch Current Market Data
-      const moexUrl = `https://iss.moex.com/iss/engines/futures/markets/forts/securities/${t.toUpperCase()}.json`;
-      const res = await fetchWithRetry(moexUrl, { signal });
-      if (signal.aborted) return;
-      
-      if (!res.ok) throw new Error('Ошибка загрузки маркет-данных');
-      const data = await res.json();
+      // 2. Determine earliest trade date to fetch sufficient history
+      const currentTrades = overrideTrades || trades;
+      const validCurrent = currentTrades.filter(t => t.date);
+      const earliestTradeDate = validCurrent.reduce((min, tr) => {
+        const iso = normalizeDateToISO(tr.date);
+        return (iso && iso < min) ? iso : min;
+      }, '2023-01-01');
+      const fromDate = earliestTradeDate < '2023-01-01' ? earliestTradeDate : '2023-01-01';
 
-      if (!data?.securities?.data?.[0] || !data?.marketdata?.data?.[0]) {
-        throw new Error(`Тикер ${t} не найден или данные недоступны`);
+      // 3. Parallel fetch of live quotes and historical records
+      const [quoteResult, histResult] = await Promise.allSettled([
+        fetch(`/api/moex?ticker=${sym}`),
+        fetch(`/api/moex/history?ticker=${sym}&from=${fromDate}`)
+      ]);
+
+      if (quoteResult.status === 'fulfilled' && quoteResult.value.ok) {
+        const quoteData = await quoteResult.value.json();
+        setMarketData(quoteData);
+        try {
+          localStorage.setItem(`moex_market_data_${sym}`, JSON.stringify(quoteData));
+        } catch {}
+        setLastUpdateTime(new Date().toLocaleTimeString('ru-RU'));
+        setLastUpdateTimestamp(Date.now());
+        if (quoteData.funding !== undefined && quoteData.funding !== 0) {
+          setFunding(String(quoteData.funding));
+        }
       }
 
-      const secCols = data.securities.columns;
-      const secRow = data.securities.data[0];
-      const mdCols = data.marketdata.columns;
-      const mdRow = data.marketdata.data[0];
-
-      const getVal = (cols: string[], row: any[], name: string) => row[cols.indexOf(name)];
-
-      const lastPrice = parseFloat(getVal(mdCols, mdRow, 'LAST')) || 0;
-      const prevSettle = parseFloat(getVal(secCols, secRow, 'PREVSETTLEPRICE')) || 0;
-      const settleClr = parseFloat(getVal(secCols, secRow, 'SETTLEPRICE_CLR'));
-      const mdSettle = parseFloat(getVal(mdCols, mdRow, 'SETTLEPRICE'));
-      const settle = (!isNaN(settleClr) && settleClr > 0) ? settleClr : ((!isNaN(mdSettle) && mdSettle > 0) ? mdSettle : 0);
-      const stepPrice = parseFloat(getVal(secCols, secRow, 'STEPPRICE')) || 1;
-      const minStep = parseFloat(getVal(secCols, secRow, 'MINSTEP')) || 1;
-      const swapRate = parseFloat(getVal(mdCols, mdRow, 'SWAPRATE'));
-      const fundingRate = parseFloat(getVal(secCols, secRow, 'FUNDINGRATE'));
-      
-      const parsedMarketData = {
-        last: lastPrice,
-        prevSettlePrice: prevSettle,
-        settlePrice: settle,
-        stepPrice: stepPrice,
-        minStep: minStep,
-        funding: !isNaN(swapRate) ? swapRate : (!isNaN(fundingRate) ? fundingRate : undefined),
-        source: 'MOEX ISS'
-      };
-
-      setMarketData(parsedMarketData);
-      setLastUpdateTime(new Date().toLocaleTimeString('ru-RU'));
-      setLastUpdateTimestamp(Date.now());
-
-      if (parsedMarketData.funding !== undefined && parsedMarketData.funding !== 0) {
-        setFunding(parsedMarketData.funding.toString());
-      } else {
-        setFunding('');
-      }
-
-      // 2. Fetch History
-      let histData: any[] = [];
-      try {
-        const d = new Date();
-        d.setMonth(d.getMonth() - 3);
-        const fromDate = d.toISOString().split('T')[0];
-        
-        const histUrl = `https://iss.moex.com/iss/history/engines/futures/markets/forts/securities/${t.toUpperCase()}.json?limit=100&from=${fromDate}`;
-        const moexHistRes = await fetchWithRetry(histUrl, { signal });
-        if (signal.aborted) return;
-
-        if (moexHistRes.ok) {
-          const hData = await moexHistRes.json();
-          if (hData?.history?.data?.length > 0) {
-            const hCols = hData.history.columns;
-            const hRows = hData.history.data;
-            const getHVal = (row: any[], name: string) => row[hCols.indexOf(name)];
-
-            histData = hRows.map((row: any[]) => ({
-              tradeDate: getHVal(row, 'TRADEDATE'),
-              settlePrice: parseFloat(getHVal(row, 'SETTLEPRICE')) || parseFloat(getHVal(row, 'CLOSE')) || 0,
-              openPrice: parseFloat(getHVal(row, 'OPEN')) || 0,
-              high: parseFloat(getHVal(row, 'HIGH')) || 0,
-              low: parseFloat(getHVal(row, 'LOW')) || 0,
-            }));
-            setHistoryStatus('success');
-          } else {
-            setHistoryStatus('partial');
-          }
+      if (histResult.status === 'fulfilled' && histResult.value.ok) {
+        const histJson = await histResult.value.json();
+        if (histJson.history && histJson.history.length > 0) {
+          setHistoryData(histJson.history);
+          setHistoryStatus('success');
+          try {
+            localStorage.setItem(`moex_history_v4_${sym}`, JSON.stringify(histJson.history));
+          } catch {}
         }
-        
-        if (histData.length > 0) {
-          setHistoryData(histData);
-          setMarketData(prev => prev ? { ...prev, historyCount: histData.length } : null);
-        } else {
-          setHistoryData(null);
-        }
-      } catch (e: any) {
-        if (e.name === 'AbortError') return;
-        console.error('History fetch error:', e);
-        setHistoryStatus('error');
-        setHistoryData(null);
       }
     } catch (err: any) {
-      if (err.name === 'AbortError') return;
-      setError(err.message);
-      setMarketData(null);
-      setHistoryData(null);
-      setHistoryStatus('error');
+      console.error('Fetch error:', err);
+      setError(err.message || 'Ошибка соединения с Мосбиржей');
     } finally {
-      if (!signal.aborted) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
-  }, []);
+  }, [trades]);
 
+  // Initial restore from localStorage & fetch on mount
   useEffect(() => {
-    const savedTicker = localStorage.getItem('moex_last_ticker') || 'SiM6';
-    fetchMarketData(savedTicker);
-  }, [fetchMarketData]);
+    let mounted = true;
+    const load = async () => {
+      let targetTicker = 'USDRUBF';
+      let parsedTrades: Trade[] | undefined;
+      
+      try {
+        const savedTicker = localStorage.getItem('moex_last_ticker');
+        if (savedTicker) {
+          targetTicker = savedTicker;
+          if (mounted) setTicker(savedTicker);
+          const cached = localStorage.getItem(`moex_market_data_${savedTicker}`);
+          if (cached && mounted) {
+            try { setMarketData(JSON.parse(cached)); } catch {}
+          } else if (DEFAULT_SPECS[savedTicker] && mounted) {
+            setMarketData(DEFAULT_SPECS[savedTicker]);
+          }
+        }
+
+        // Always guarantee preloaded baseline
+        const pre = getPreloadedHistory(targetTicker);
+        if (pre.length > 0 && mounted) {
+          setHistoryData(pre);
+          setHistoryStatus('success');
+        }
+
+        const savedInstStr = localStorage.getItem('moex_instruments');
+        if (savedInstStr) {
+          const inst = JSON.parse(savedInstStr);
+          if (Array.isArray(inst) && inst.length > 0 && mounted) {
+            setAllInstruments({ list: inst, synced: true });
+          }
+        }
+        const savedTradesStr = localStorage.getItem('moex_trades_v2');
+        if (savedTradesStr) {
+          const parsed = JSON.parse(savedTradesStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            parsedTrades = parsed;
+            if (mounted) setTrades(parsed);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load local storage:', e);
+      }
+
+      if (mounted) {
+        setNow(Date.now());
+        fetchMarketData(targetTicker, parsedTrades);
+      }
+    };
+    load();
+    return () => { mounted = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist trades to localStorage whenever updated
+  useEffect(() => {
+    try {
+      localStorage.setItem('moex_trades_v2', JSON.stringify(trades));
+    } catch {}
+  }, [trades]);
+
+  // Auto-extend history if trades go further back than current loaded history
+  useEffect(() => {
+    const validTrades = trades.filter(t => t.date);
+    if (validTrades.length === 0) return;
+    const earliestTradeDate = validTrades.reduce((min, tr) => {
+      const iso = normalizeDateToISO(tr.date);
+      return (iso && iso < min) ? iso : min;
+    }, '9999-12-31');
+    if (!earliestTradeDate || earliestTradeDate === '9999-12-31') return;
+
+    const earliestLoaded = historyData && historyData.length > 0 ? historyData[0].tradeDate : '';
+    const needsFetch = !earliestLoaded || earliestTradeDate < earliestLoaded;
+
+    if (needsFetch && !historyLoading) {
+      const fromDate = earliestTradeDate < '2023-01-01' ? earliestTradeDate : '2023-01-01';
+      const timer = setTimeout(() => {
+        fetchHistoryOnly(ticker, fromDate);
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [trades, historyData, historyLoading, ticker, fetchHistoryOnly]);
+
+  const selectInstrument = (inst: any) => {
+    hapticFeedback('light');
+    const sym = inst.ticker.toUpperCase();
+    setTicker(sym);
+    localStorage.setItem('moex_last_ticker', sym);
+    setShowSuggestions(false);
+
+    // Instant preloaded history switch
+    const preloaded = getPreloadedHistory(sym);
+    if (preloaded.length > 0) {
+      setHistoryData(preloaded);
+      setHistoryStatus('success');
+    }
+
+    const cached = localStorage.getItem(`moex_market_data_${sym}`);
+    if (cached) {
+      try { setMarketData(JSON.parse(cached)); } catch {}
+    } else if (DEFAULT_SPECS[sym]) {
+      setMarketData(DEFAULT_SPECS[sym]);
+    }
+
+    fetchMarketData(sym);
+  };
 
   const addTrade = () => {
     hapticFeedback('light');
-    setTrades([...trades, {
-      id: Date.now().toString() + Math.random().toString(),
-      date: getMoexSessionDateStr(),
-      type: 'Long',
-      price: '',
-      priceMode: 'rubles',
-      lots: 1
-    }]);
+    const today = getMoexSessionDateStr();
+    const defaultPrice = marketData?.last || historyMap.get(today) || '';
+    setTrades([
+      ...trades,
+      {
+        id: Date.now().toString() + Math.random().toString().slice(2, 6),
+        date: today,
+        type: 'Long',
+        price: defaultPrice ? String(defaultPrice) : '',
+        lots: 1
+      }
+    ]);
   };
 
   const removeTrade = (id: string) => {
@@ -541,209 +465,342 @@ export default function Home() {
     setTrades(trades.map(t => t.id === id ? { ...t, [field]: value } : t));
   };
 
-  const calculations = useMemo(() => {
-    if (!marketData || trades.length === 0) return { total: 0, pending: 0, settled: 0, settledUnpaid: 0, netPosition: 0, details: null, timeline: [] };
+  const performClearAll = () => {
+    hapticFeedback('heavy');
+    setTrades([{
+      id: '1',
+      date: getMoexSessionDateStr(),
+      type: 'Long',
+      price: marketData?.last ? String(marketData.last) : '',
+      lots: 1
+    }]);
+    setShowClearConfirm(false);
+  };
 
-    const { last, prevSettlePrice, settlePrice, stepPrice, minStep } = marketData;
+  const isPerp = useMemo(() => {
+    const t = ticker.toUpperCase();
+    return t.endsWith('F') || marketData?.isPerp === true;
+  }, [ticker, marketData]);
+
+  // Map and validate trades with normalized ISO dates
+  const validTradesMapped = useMemo(() => {
+    return trades
+      .map(t => {
+        const cleanDate = normalizeDateToISO(t.date);
+        const pStr = String(t.price ?? '').replace(',', '.').trim();
+        let parsedPrice = parseFloat(pStr);
+        
+        // Auto fallback to date's settlement price from history if user left price empty
+        if ((isNaN(parsedPrice) || parsedPrice <= 0) && cleanDate && historyMap.has(cleanDate)) {
+          parsedPrice = historyMap.get(cleanDate)!;
+        }
+
+        const lots = Math.max(1, t.lots || 1);
+        const validPrice = !isNaN(parsedPrice) && parsedPrice > 0;
+
+        return {
+          ...t,
+          date: cleanDate,
+          lots,
+          priceInPoints: validPrice ? parsedPrice : (marketData?.last || marketData?.prevSettlePrice || 0),
+          isValid: validPrice || (marketData?.last !== undefined && marketData.last > 0)
+        };
+      })
+      .filter(t => t.isValid && t.lots > 0);
+  }, [trades, historyMap, marketData]);
+
+  // Core Financial & Margin Calculation Engine
+  const calculations = useMemo(() => {
+    const defaultSpec = DEFAULT_SPECS[ticker.toUpperCase()];
+    const netPosFallback = validTradesMapped.reduce((acc, t) => acc + (t.type === 'Long' ? 1 : -1) * t.lots, 0);
+
+    if (validTradesMapped.length === 0) {
+      return { 
+        total: 0, 
+        totalVM: 0,
+        totalFunding: 0,
+        pending: 0, 
+        settled: 0, 
+        settledUnpaid: 0, 
+        netPosition: 0, 
+        hasValidTargetPrice: true,
+        details: null, 
+        timeline: [] 
+      };
+    }
+
+    const stepPrice = marketData?.stepPrice || defaultSpec?.stepPrice || 10;
+    const minStep = marketData?.minStep || defaultSpec?.minStep || 0.01;
+    const multiplier = minStep > 0 ? (stepPrice / minStep) : (defaultSpec?.multiplier || 1000);
     
-    // Custom price override
-    const fallbackLast = last > 0 ? last : (settlePrice || prevSettlePrice);
-    const effectiveLast = customPrice !== '' && !isNaN(parseFloat(customPrice)) ? parseFloat(customPrice) : fallbackLast;
-    const targetPrice = effectiveLast;
+    const prevSettlePrice = marketData?.prevSettlePrice || defaultSpec?.prevSettlePrice || 0;
+    const settlePrice = marketData?.settlePrice || prevSettlePrice || defaultSpec?.settlePrice || 0;
+    const lastPrice = marketData?.last || settlePrice || prevSettlePrice || defaultSpec?.last || 0;
+
+    // Target price (user custom override or live quote)
+    const customPriceParsed = customPrice !== '' ? parseFloat(customPrice.replace(',', '.')) : NaN;
+    const hasCustomPrice = !isNaN(customPriceParsed) && customPriceParsed > 0;
+    
+    let referencePrice = 0;
+    if (hasCustomPrice) {
+      referencePrice = customPriceParsed;
+    } else if (lastPrice > 0) {
+      referencePrice = lastPrice;
+    } else if (settlePrice > 0) {
+      referencePrice = settlePrice;
+    } else if (prevSettlePrice > 0) {
+      referencePrice = prevSettlePrice;
+    } else if (historyData && historyData.length > 0) {
+      const sortedHistory = [...historyData].sort((a, b) => a.tradeDate.localeCompare(b.tradeDate));
+      const lastHist = sortedHistory[sortedHistory.length - 1];
+      if (lastHist && lastHist.settlePrice > 0) {
+        referencePrice = lastHist.settlePrice;
+      }
+    } else if (defaultSpec?.last > 0) {
+      referencePrice = defaultSpec.last;
+    }
+
+    const hasValidTargetPrice = referencePrice > 0;
+    const targetPrice = hasValidTargetPrice ? referencePrice : 0;
+
+    if (!hasValidTargetPrice) {
+      return { 
+        total: 0, 
+        totalVM: 0,
+        totalFunding: 0,
+        pending: 0, 
+        settled: 0, 
+        settledUnpaid: 0, 
+        netPosition: netPosFallback, 
+        hasValidTargetPrice: false,
+        details: null, 
+        timeline: [] 
+      };
+    }
 
     let netPosition = 0;
-    let totalVM = 0;
-    
-    const validTrades = trades
-      .filter(t => !isNaN(parseFloat(t.price)) && t.lots > 0)
-      .map(t => {
-        const rawPrice = parseFloat(t.price);
-        const pMode = t.priceMode || 'rubles';
-        const priceInPoints = pMode === 'rubles' ? (rawPrice * minStep) / stepPrice : rawPrice;
-        return { ...t, priceInPoints };
-      });
-
-    for (const t of validTrades) {
-        const p = t.priceInPoints;
-        const dir = t.type === 'Long' ? 1 : -1;
-        netPosition += dir * t.lots;
-        // Calculation using ticks to avoid float issues
-        const ticks = Math.round((targetPrice - p) / minStep);
-        const pnlFix = ticks * stepPrice * t.lots * dir;
-        totalVM += pnlFix;
+    for (const t of validTradesMapped) {
+      const dir = t.type === 'Long' ? 1 : -1;
+      netPosition += dir * t.lots;
     }
 
-    const moscowTimeStr = new Date().toLocaleString("en-US", {timeZone: "Europe/Moscow"});
-    const mskNow = new Date(moscowTimeStr);
-    const todayClearingDate = getMoexSessionDateStr();
-    
-    let netPosCarriedOver = 0;
-    let currentTradesPnL = 0;
-    let currentTradesDetails: any[] = [];
+    // Direct variation margin from entry prices to target price
+    let directVM = 0;
+    for (const t of validTradesMapped) {
+      const dir = t.type === 'Long' ? 1 : -1;
+      const ticks = (targetPrice - t.priceInPoints) / minStep;
+      const pnl = ticks * stepPrice * t.lots * dir;
+      directVM += pnl;
+    }
 
-    let latestHistoryDateStr = '';
-    let effectivePrevSettlePrice = prevSettlePrice;
+    // Process Timeline from Historical Clearing Days
+    const timeline: Array<{
+      date: string;
+      settlePrice: number;
+      swapRate: number;
+      dailyFunding: number;
+      dailyVM: number;
+      dailyTotal: number;
+      netPos: number;
+      isDebited: boolean;
+    }> = [];
+
+    let totalHistoricalFunding = 0;
+    let totalSettledDailyVM = 0;
+    let latestHistoryDate = "1970-01-01";
+    let latestHistorySettle = prevSettlePrice > 0 ? prevSettlePrice : targetPrice;
+
     if (historyData && historyData.length > 0) {
-       const sortedHd = [...historyData].sort((a, b) => a.tradeDate.localeCompare(b.tradeDate));
-       latestHistoryDateStr = sortedHd[sortedHd.length - 1].tradeDate.split('T')[0];
-       effectivePrevSettlePrice = sortedHd[sortedHd.length - 1].settlePrice;
-    }
+      const sortedHistory = [...historyData].sort((a, b) => a.tradeDate.localeCompare(b.tradeDate));
+      const sortedTrades = [...validTradesMapped].sort((a, b) => a.date.localeCompare(b.date));
+      const earliestTradeDate = sortedTrades[0]?.date;
 
-    const normTrades = validTrades.map(t => ({
-      ...t,
-      normDate: t.date
-    }));
+      latestHistoryDate = sortedHistory[sortedHistory.length - 1].tradeDate;
+      latestHistorySettle = sortedHistory[sortedHistory.length - 1].settlePrice;
 
-    for (const t of normTrades) {
-        const p = t.priceInPoints;
-        const dir = t.type === 'Long' ? 1 : -1;
+      if (earliestTradeDate) {
+        const relevantHistory = sortedHistory.filter(h => h.tradeDate >= earliestTradeDate);
         
-        // A trade goes to 'Pending/Current' (Section B) if:
-        // 1) Its normDate >= todayClearingDate (it truly belongs to the upcoming/active session)
-        // 2) OR its normDate > latestHistoryDate (the MOEX history API hasn't generated a SettlePrice for this yet, so we must calculate it manually against live targetPrice).
-        const missingFromHistory = latestHistoryDateStr !== '' && t.normDate > latestHistoryDateStr;
-        
-        if (t.normDate >= todayClearingDate || missingFromHistory) {
-            const ticks = Math.round((targetPrice - p) / minStep);
-            const pnlFix = ticks * stepPrice * t.lots * dir;
-            currentTradesPnL += pnlFix;
-            currentTradesDetails.push({ ...t, pnl: pnlFix });
-        } else {
-            netPosCarriedOver += dir * t.lots;
-        }
-    }
-    
-    const ticksCarried = Math.round((targetPrice - effectivePrevSettlePrice) / minStep);
-    const pendingFromCarry = ticksCarried * stepPrice * netPosCarriedOver;
-    const pendingFromNew = currentTradesPnL;
-    let pendingVM = pendingFromCarry + pendingFromNew;
-    let fundingTotalVal = 0;
+        let isFirstHistory = true;
+        let lastProcessedHistoryDate = "";
+        let lastProcessedHistorySettle = 0;
 
-    if (isPerp && funding) {
-      const fnd = parseFloat(funding);
-      if (!isNaN(fnd)) {
-        // Positive funding means Long pays (negative PnL), Short receives (positive PnL)
-        fundingTotalVal = -fnd * netPosition;
-        pendingVM += fundingTotalVal;
-        totalVM += fundingTotalVal;
+        relevantHistory.forEach((day) => {
+          // Net position at the time of THIS historical clearing
+          let posAtClearing = 0;
+          sortedTrades.forEach(t => {
+            if (t.date <= day.tradeDate) {
+              posAtClearing += (t.type === 'Long' ? 1 : -1) * t.lots;
+            }
+          });
+
+          // Daily Funding
+          let dailyFunding = 0;
+          if (isPerp && day.swapRate !== undefined) {
+            dailyFunding = -1 * day.swapRate * multiplier * posAtClearing;
+          }
+
+          // Daily VM breakdown: Carried vs New (handles weekend gaps flawlessly)
+          let carriedPosFromLastClearing = 0;
+          let newTradesVM = 0;
+
+          sortedTrades.forEach(t => {
+            if (t.date <= day.tradeDate) {
+              const dir = t.type === 'Long' ? 1 : -1;
+              if (!isFirstHistory && t.date <= lastProcessedHistoryDate) {
+                carriedPosFromLastClearing += dir * t.lots;
+              } else {
+                newTradesVM += (day.settlePrice - t.priceInPoints) * multiplier * dir * t.lots;
+              }
+            }
+          });
+
+          let carryVM = 0;
+          if (!isFirstHistory) {
+            carryVM = (day.settlePrice - lastProcessedHistorySettle) * multiplier * carriedPosFromLastClearing;
+          }
+
+          let dailyVM = carryVM + newTradesVM;
+          let dailyTotal = dailyVM + dailyFunding;
+
+          totalHistoricalFunding += dailyFunding;
+          totalSettledDailyVM += dailyVM;
+
+          timeline.push({
+            date: day.tradeDate,
+            settlePrice: day.settlePrice,
+            swapRate: day.swapRate || 0,
+            dailyFunding,
+            dailyVM,
+            dailyTotal,
+            netPos: posAtClearing,
+            isDebited: true
+          });
+
+          lastProcessedHistoryDate = day.tradeDate;
+          lastProcessedHistorySettle = day.settlePrice;
+          isFirstHistory = false;
+        });
       }
     }
 
-    const timeline: any[] = [];
-    if (historyData && historyData.length > 0) {
-       const sortedHistory = [...historyData]
-         .map(h => ({ ...h, tradeDate: h.tradeDate.split('T')[0] }))
-         .sort((a, b) => a.tradeDate.localeCompare(b.tradeDate));
-       
-       const sortedTrades = [...normTrades]
-         .sort((a, b) => a.normDate.localeCompare(b.normDate));
+    // Active/Pending Session Calculations
+    const sortedTrades = [...validTradesMapped].sort((a, b) => a.date.localeCompare(b.date));
 
-       const earliestTradeDate = sortedTrades[0]?.normDate;
-       
-       if (earliestTradeDate) {
-           const relevantHistory = sortedHistory.filter(h => h.tradeDate >= earliestTradeDate);
-           
-           relevantHistory.forEach((day, idx) => {
-               let carryPosAtStart = 0;
-               sortedTrades.forEach(t => {
-                   if (t.normDate < day.tradeDate) {
-                       carryPosAtStart += (t.type === 'Long' ? 1 : -1) * t.lots;
-                   }
-               });
+    // Carried position from latest historical clearing to current live session
+    let netPosCarriedOver = 0;
+    let intradayTradesPnL = 0;
+    const currentTradesDetails: any[] = [];
 
-               let dailyVM = 0;
-               if (idx > 0) {
-                   const prevSettle = relevantHistory[idx-1].settlePrice;
-                   const ticks = Math.round((day.settlePrice - prevSettle) / minStep);
-                   dailyVM += ticks * stepPrice * carryPosAtStart;
-               }
+    sortedTrades.forEach(t => {
+      const dir = t.type === 'Long' ? 1 : -1;
+      if (t.date > latestHistoryDate) {
+        // New trade since the last available clearing (e.g. today or weekend)
+        const pnl = (targetPrice - t.priceInPoints) * multiplier * t.lots * dir;
+        intradayTradesPnL += pnl;
+        currentTradesDetails.push({ ...t, pnl });
+      } else {
+        netPosCarriedOver += dir * t.lots;
+      }
+    });
 
-               const todayTrades = sortedTrades.filter(t => t.normDate === day.tradeDate);
-               todayTrades.forEach(t => {
-                    const tradePrice = t.priceInPoints;
-                    const dir = t.type === 'Long' ? 1 : -1;
-                    const ticks = Math.round((day.settlePrice - tradePrice) / minStep);
-                    dailyVM += ticks * stepPrice * dir * t.lots;
-               });
+    const pendingFromCarry = (targetPrice - latestHistorySettle) * multiplier * netPosCarriedOver;
+    const pendingFromNew = intradayTradesPnL;
+    let pendingVM = pendingFromCarry + pendingFromNew;
 
-               const parts = day.tradeDate.split('-');
-               const clearingTimeMSK = new Date(+parts[0], +parts[1] - 1, +parts[2], 23, 50, 0);
-               const isDebited = mskNow >= clearingTimeMSK;
-
-               timeline.push({
-                   date: day.tradeDate,
-                   settlePrice: day.settlePrice,
-                   netPos: carryPosAtStart + todayTrades.reduce((acc, t) => acc + (t.type === 'Long' ? 1 : -1) * t.lots, 0),
-                   dailyVM,
-                   isDebited
-               });
-           });
-       }
+    // Pending Funding for live session
+    let pendingFunding = 0;
+    if (isPerp && funding) {
+      const liveSwapRate = parseFloat(funding.replace(',', '.'));
+      if (!isNaN(liveSwapRate) && liveSwapRate !== 0) {
+        pendingFunding = -1 * liveSwapRate * multiplier * netPosition;
+      }
     }
 
-    let rawSettledDebitedVM = timeline.filter(h => h.isDebited).reduce((acc, h) => acc + h.dailyVM, 0);
-    const rawSettledUnpaidVM = timeline.filter(h => !h.isDebited).reduce((acc, h) => acc + h.dailyVM, 0);
-    const rawSettledVM = rawSettledDebitedVM + rawSettledUnpaidVM; 
-    
-    // MATHEMATICAL CORE (Cycle 1 Audit): 
-    // totalVM computes total PnL purely via (target-entry) ignoring intermediate history API gaps.
-    // If the API missed some days (e.g. weekends or untracked history), rawSettledVM would leak profit.
-    // We force the mathematical alignment:
-    const mathematicallyMissedVM = totalVM - (pendingVM + rawSettledVM);
-    rawSettledDebitedVM += mathematicallyMissedVM;
+    const totalFunding = totalHistoricalFunding + pendingFunding;
+    const totalVM = directVM;
+    const grandTotal = totalVM + totalFunding;
+    const totalPending = pendingVM + pendingFunding;
+    const totalSettled = totalSettledDailyVM + totalHistoricalFunding;
 
-    return { 
-      total: Number(totalVM.toFixed(2)),
-      pending: Number(pendingVM.toFixed(2)), 
-      settled: Number(rawSettledDebitedVM.toFixed(2)), 
-      settledUnpaid: Number(rawSettledUnpaidVM.toFixed(2)),
-      netPosition, 
-      details: { 
-        targetPrice, 
-        netPosCarriedOver, 
-        currentTradesPnL, 
-        prevSettlePrice, 
-        pendingFromCarry, 
-        pendingFromNew, 
+    return {
+      total: Number(grandTotal.toFixed(2)),
+      totalVM: Number(totalVM.toFixed(2)),
+      totalFunding: Number(totalFunding.toFixed(2)),
+      pending: Number(totalPending.toFixed(2)),
+      settled: Number(totalSettled.toFixed(2)),
+      settledUnpaid: 0,
+      netPosition,
+      hasValidTargetPrice: true,
+      details: {
+        targetPrice,
+        netPosCarriedOver,
+        currentTradesPnL: intradayTradesPnL,
+        prevSettlePrice: latestHistorySettle,
+        pendingFromCarry,
+        pendingFromNew,
         currentTradesDetails,
         minStep,
         stepPrice,
-        fundingTotal: fundingTotalVal
-      }, 
-      timeline 
+        multiplier,
+        fundingTotal: totalFunding,
+        historicalFunding: totalHistoricalFunding,
+        pendingFunding
+      },
+      timeline
     };
-  }, [marketData, trades, isPerp, funding, historyData, customPrice]);
+  }, [marketData, validTradesMapped, isPerp, funding, historyData, customPrice, ticker]);
 
-  const { total, pending, settled, settledUnpaid, netPosition, details, timeline } = calculations;
+  const { total, totalVM, totalFunding, pending, settled, netPosition, details, timeline } = calculations;
 
-  // validTradesMapped has priceInPoints computed:
-  const validTradesMapped = useMemo(() => {
-    if (!marketData) return [];
-    return trades
-      .filter(t => !isNaN(parseFloat(t.price)) && t.lots > 0)
-      .map(t => {
-        const rawPrice = parseFloat(t.price);
-        const pMode = t.priceMode || 'rubles';
-        const priceInPoints = pMode === 'rubles' ? (rawPrice * marketData.minStep) / marketData.stepPrice : rawPrice;
-        return { ...t, priceInPoints };
-      });
-  }, [trades, marketData]);
+  // Filtered & Paginated Clearing Timeline (Newest first)
+  const filteredTimeline = useMemo(() => {
+    let list = [...timeline].reverse();
+    if (clearingFilter === 'swap') {
+      list = list.filter(item => (item.swapRate !== undefined && item.swapRate !== 0) || (item.dailyFunding !== undefined && item.dailyFunding !== 0));
+    } else if (clearingFilter === 'profit') {
+      list = list.filter(item => item.dailyTotal > 0);
+    } else if (clearingFilter === 'loss') {
+      list = list.filter(item => item.dailyTotal < 0);
+    }
+    return list;
+  }, [timeline, clearingFilter]);
 
+  const displayedTimeline = useMemo(() => {
+    return filteredTimeline.slice(0, clearingVisibleCount);
+  }, [filteredTimeline, clearingVisibleCount]);
+
+  const swapDaysCount = useMemo(() => {
+    return timeline.filter(item => (item.swapRate !== undefined && item.swapRate !== 0) || (item.dailyFunding !== undefined && item.dailyFunding !== 0)).length;
+  }, [timeline]);
+
+  const getDayOfWeekStr = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr);
+      const days = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+      return days[d.getDay()] || '';
+    } catch {
+      return '';
+    }
+  };
+
+  // Average entry price
   const netLots = validTradesMapped.reduce((acc, t) => acc + (t.type === 'Long' ? t.lots : -t.lots), 0);
-  
   let avgEntry = '—';
   if (netLots !== 0) {
-    const netValue = validTradesMapped.reduce((acc, t) => acc + (t.priceInPoints * t.lots * (t.type === 'Long' ? 1 : -1)), 0);
-    avgEntry = (Math.abs(netValue / netLots)).toFixed(2);
+    const totalSpent = validTradesMapped.reduce((acc, t) => acc + (t.priceInPoints * t.lots * (t.type === 'Long' ? 1 : -1)), 0);
+    avgEntry = (Math.abs(totalSpent / netLots)).toFixed(2);
   } else if (validTradesMapped.length > 0) {
-    avgEntry = 'Сделки закрыты';
+    avgEntry = 'Сделки закрыты (0)';
   }
 
-  const pointsDiff = details ? ((total - (details.fundingTotal || 0)) / ((details.stepPrice / details.minStep) || 1)).toFixed(2) : '0.00';
+  // Difference in points
+  const pointsDiff = details && details.multiplier > 0 
+    ? (totalVM / details.multiplier).toFixed(2) 
+    : '0.00';
 
-    const handleCopy = () => {
+  const handleCopy = () => {
     if (!marketData || !details) return;
-
     const reportText = generateVMReport(ticker, isPerp, marketData, calculations, marketPhase, validTradesMapped);
     
     if (navigator.share) {
@@ -751,7 +808,7 @@ export default function Home() {
       navigator.share({
         title: `Отчет по ВМ: ${ticker}`,
         text: reportText.trim()
-      }).catch(() => {}); // Suppress AbortError to prevent Next.js overlay
+      }).catch(() => {});
     } else {
       hapticFeedback('medium');
       navigator.clipboard.writeText(reportText.trim());
@@ -760,552 +817,682 @@ export default function Home() {
     }
   };
 
+  const getNextClearingTimeText = () => {
+    return 'Сегодня 23:50 (Вечерний клиринг)';
+  };
+
   return (
-    <main className="max-w-[1400px] mx-auto p-4 sm:p-6 lg:p-8 space-y-4">
-      {/* Compact Top Bar */}
-      <header className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 py-3 px-4 bg-zinc-900/80 border border-zinc-800 rounded-2xl backdrop-blur-md sticky top-4 z-[50] shadow-2xl">
+    <main className="max-w-[1440px] mx-auto p-4 sm:p-6 lg:p-8 space-y-5 text-zinc-100 relative">
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="fixed top-20 right-4 sm:right-8 z-[110] bg-zinc-900/95 border border-blue-500/40 text-blue-300 text-xs font-mono font-bold px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 backdrop-blur-md"
+          >
+            <Sparkles className="w-4 h-4 text-blue-400 shrink-0" />
+            <span>{toastMessage}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Top Header Bar */}
+      <header className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 py-3.5 px-5 bg-zinc-900/90 border border-zinc-800 rounded-2xl backdrop-blur-md sticky top-4 z-[50] shadow-2xl">
         <div className="flex items-center justify-between w-full md:w-auto md:justify-start gap-4">
           <div className="flex flex-col">
             <h1 className="text-sm font-black uppercase tracking-widest text-zinc-100 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full animate-pulse bg-blue-500" />
-              VM.MOEX <span className="text-[10px] text-zinc-500 font-normal">v2.0</span>
+              <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.6)]" />
+              VM.MOEX <span className="text-[10px] text-zinc-400 font-normal">v2026</span>
             </h1>
-            <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-tight">Финансовый Терминал 2026</p>
+            <p className="text-[10px] text-zinc-400 uppercase font-bold tracking-tight">Калькулятор маржи и фандинга</p>
           </div>
           
           <div className="h-8 w-[1px] bg-zinc-800 hidden md:block" />
 
-          {/* Quick Select Tickers */}
-          <div className="hidden lg:flex gap-1">
-            {['USDRUBF', 'IMOEXF', 'SBERF', 'CNYRUBF'].map(t => (
+          {/* Quick Select Buttons */}
+          <div className="hidden xl:flex items-center gap-1.5 overflow-x-auto py-1">
+            {['USDRUBF', 'IMOEXF', 'GLDRUBF', 'CNYRUBF', 'RGBIF', 'SBERF', 'EURRUBF'].map(t => (
               <button 
                 key={t}
-                onClick={() => { setTicker(t); fetchMarketData(t); }}
-                className={cn("px-2 py-1 rounded text-[10px] font-bold transition-all", ticker.toLowerCase() === t.toLowerCase() ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300")}
+                onClick={() => { 
+                  setTicker(t);
+                  localStorage.setItem('moex_last_ticker', t);
+                  const cached = localStorage.getItem(`moex_market_data_${t}`);
+                  if (cached) {
+                    try { setMarketData(JSON.parse(cached)); } catch {}
+                  } else if (DEFAULT_SPECS[t]) {
+                    setMarketData(DEFAULT_SPECS[t]);
+                  }
+                  fetchMarketData(t); 
+                }}
+                className={cn(
+                  "px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all shrink-0 font-mono",
+                  ticker.toUpperCase() === t ? "bg-blue-600/30 text-blue-300 border border-blue-500/50" : "bg-zinc-950/70 text-zinc-400 hover:text-white border border-zinc-800"
+                )}
               >
                 {t}
               </button>
             ))}
           </div>
-
-          <div className="h-8 w-[1px] bg-zinc-800 hidden md:block" />
         </div>
 
-        <div className="flex flex-row items-center gap-2 w-full md:flex-1">
-          <div className="relative flex-1 group min-w-[200px]">
-                <input 
-                  type="text" 
-                  value={ticker}
-                  onFocus={() => setShowSuggestions(true)}
-                  onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                  onChange={(e) => setTicker(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') fetchMarketData(ticker); }}
-                  placeholder="ПОИСК ТИКЕРА..."
-                  className="bg-zinc-950 border border-zinc-800 rounded-xl pl-10 pr-10 py-2 w-full text-[16px] md:text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500/50 uppercase font-mono transition-all h-10 md:h-12"
-                />
-                <Search className="absolute left-3 top-2.5 md:top-3.5 w-4 h-4 text-zinc-600 group-focus-within:text-blue-500 transition-colors" />
-                {ticker && (
-                   <button onClick={() => { setTicker(''); fetchMarketData(''); setShowSuggestions(false); }} className="absolute right-3 top-2.5 md:top-3.5 opacity-50 hover:opacity-100 transition-opacity">
-                     <X className="w-4 h-4 text-zinc-400" />
-                   </button>
-                )}
-                
-                <AnimatePresence>
-                  {showSuggestions && filteredInstruments.length > 0 && (
-                    <motion.div 
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.95 }}
-                      className="absolute top-full left-0 right-0 mt-2 bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl z-[100] backdrop-blur-md"
-                    >
-                      <div className="max-h-60 overflow-y-auto custom-scrollbar">
-                        {filteredInstruments.map((inst) => (
-                          <button
-                            key={inst.uid || inst.ticker}
-                            onMouseDown={(e) => {
-                                e.preventDefault();
-                                selectInstrument(inst);
-                            }}
-                            className="w-full text-left px-4 py-3 hover:bg-zinc-800/80 flex flex-col transition-colors border-b border-zinc-800/50 last:border-0"
-                          >
-                            <span className="text-[11px] font-bold text-white uppercase font-mono flex items-center justify-between">
-                              {inst.ticker}
-                              <span className="text-[9px] text-zinc-500 font-normal uppercase">ФОРТС</span>
-                            </span>
-                            <span className="text-[9px] text-zinc-500 truncate">{inst.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-
+        {/* Search & Action Controls */}
+        <div className="flex items-center gap-2.5 w-full md:w-auto flex-1 max-w-2xl justify-end">
+          <div className="relative flex-1 group">
+            <input 
+              type="text" 
+              value={ticker}
+              onFocus={() => setShowSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 250)}
+              onChange={(e) => setTicker(e.target.value.toUpperCase())}
+              onKeyDown={(e) => { if (e.key === 'Enter') fetchMarketData(ticker); }}
+              placeholder="ПОИСК ТИКЕРА..."
+              className="bg-zinc-950 border border-zinc-800 rounded-xl pl-10 pr-10 py-2.5 w-full text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono uppercase transition-all h-11"
+            />
+            <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-500 group-focus-within:text-blue-400 transition-colors" />
+            {ticker && (
               <button 
-                id="fetch-btn"
-                onClick={() => fetchMarketData(ticker)}
-                disabled={loading || !ticker}
-                title="Обновить котировки"
-                className="bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-xl p-2.5 transition-all active:scale-95 disabled:opacity-50 h-10 md:h-12 w-10 md:w-12 flex items-center justify-center text-center shrink-0"
+                onClick={() => { setTicker(''); setShowSuggestions(false); }} 
+                className="absolute right-3.5 top-3.5 text-zinc-500 hover:text-white transition-opacity"
               >
-                {loading ? <RefreshCw className="w-5 h-5 animate-spin text-blue-500" /> : <RefreshCw className="w-5 h-5" />}
+                <X className="w-4 h-4" />
               </button>
-        </div>
-
-        <div className="flex items-center justify-end gap-3 w-full md:w-auto">
-            <button 
-              onClick={() => setIsInstructionsOpen(true)}
-              title="Информация и поддержка"
-              className="w-10 h-10 md:w-12 md:h-12 flex items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950/50 text-zinc-400 hover:text-white hover:bg-zinc-900 transition-all shrink-0"
-            >
-              <Info className="w-5 h-5" />
-            </button>
+            )}
             
-            <button 
-              onClick={syncInstruments}
-              disabled={isSyncing}
-              title="Синхронизация актуального списка всех доступных тикеров"
-              className={cn(
-                "flex-1 sm:flex-none flex items-center justify-center gap-2 text-[10px] font-bold uppercase transition-all px-4 py-2 md:py-3 rounded-xl border h-10 md:h-12",
-                allInstruments.synced ? "text-emerald-500 bg-emerald-500/5 border-emerald-500/20" : "text-blue-400 bg-blue-500/5 border-blue-500/20 hover:text-blue-300"
+            <AnimatePresence>
+              {showSuggestions && filteredInstruments.length > 0 && (
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.96, y: 5 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.96, y: 5 }}
+                  className="absolute top-full left-0 right-0 mt-2 bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden shadow-2xl z-[100] backdrop-blur-md max-h-60 overflow-y-auto"
+                >
+                  {filteredInstruments.map((inst) => (
+                    <button
+                      key={inst.ticker}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        selectInstrument(inst);
+                      }}
+                      className="w-full text-left px-4 py-2.5 hover:bg-zinc-800 flex items-center justify-between border-b border-zinc-800/50 last:border-0"
+                    >
+                      <span className="text-xs font-bold text-white font-mono">{inst.ticker}</span>
+                      <span className="text-[10px] text-zinc-400 truncate max-w-[200px]">{inst.name}</span>
+                    </button>
+                  ))}
+                </motion.div>
               )}
-            >
-              {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : allInstruments.synced ? <Check className="w-4 h-4" /> : <RefreshCw className="w-4 h-4" />}
-              <span className="hidden sm:inline">{isSyncing ? 'Синхронизация...' : allInstruments.synced ? 'Словарь синхронизирован' : 'Синхронизировать словарь'}</span>
-            </button>
+            </AnimatePresence>
           </div>
+
+          {/* Refresh Quotes */}
+          <button 
+            id="fetch-btn"
+            onClick={() => fetchMarketData(ticker)}
+            disabled={loading || !ticker}
+            title="Обновить котировки с Мосбиржи"
+            className="bg-zinc-950 hover:bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-xl h-11 px-3.5 flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 shrink-0 text-xs font-bold"
+          >
+            <RefreshCw className={cn("w-4 h-4 text-blue-400", loading && "animate-spin")} />
+            <span className="hidden sm:inline">Обновить</span>
+          </button>
+
+          {/* Instruments Sync / DB Button */}
+          <button 
+            onClick={syncInstruments}
+            disabled={isSyncing}
+            title="Синхронизировать полный список фьючерсов Мосбиржи"
+            className={cn(
+              "flex items-center gap-1.5 text-xs font-bold transition-all px-3.5 h-11 rounded-xl border shrink-0",
+              allInstruments.synced 
+                ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/30 hover:bg-emerald-500/20" 
+                : "text-zinc-300 bg-zinc-950 border-zinc-800 hover:bg-zinc-900"
+            )}
+          >
+            {isSyncing ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-400" />
+            ) : allInstruments.synced ? (
+              <Database className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <Database className="w-3.5 h-3.5 text-zinc-400" />
+            )}
+            <span className="hidden lg:inline">{allInstruments.synced ? `ФОРТС (${allInstruments.list.length})` : 'База ФОРТС'}</span>
+          </button>
+
+          {/* Help Button */}
+          <button 
+            onClick={() => setIsInstructionsOpen(true)}
+            title="Справка и формула расчета"
+            className="h-11 w-11 flex items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-white hover:bg-zinc-900 transition-all shrink-0"
+          >
+            <HelpCircle className="w-4 h-4 text-zinc-400 hover:text-blue-400 transition-colors" />
+          </button>
+        </div>
       </header>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
-        {/* Left Column: Result Card */}
-        <section className="xl:col-span-4 space-y-4">
-          <div className="bg-zinc-900/50 border border-zinc-800 rounded-3xl p-6 relative overflow-hidden shadow-2xl group">
-             <div className={cn("absolute inset-0 opacity-10 blur-3xl transition-all duration-1000", total > 0 ? "bg-emerald-500" : total < 0 ? "bg-rose-500" : "bg-blue-500")} />
-             
-             <div className="relative z-10 flex flex-col h-full">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="space-y-1">
-                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Итоговый результат</p>
-                    <h2 className="text-sm font-black text-white uppercase">{ticker}</h2>
-                  </div>
-                  {isPerp && (
-                    <div className="px-2 py-1 bg-amber-500/10 border border-amber-500/20 rounded-md">
-                      <span className="text-[9px] font-black text-amber-500 uppercase">ВЕЧНЫЙ</span>
-                    </div>
-                  )}
+      {/* Error banner if network/API failed */}
+      {error && (
+        <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-3 px-4 flex items-center justify-between text-xs text-rose-300">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>{error} (используются кэшированные/резервные спецификации)</span>
+          </div>
+          <button 
+            onClick={() => fetchMarketData(ticker)} 
+            className="bg-rose-600/30 hover:bg-rose-600/50 border border-rose-500/40 text-white text-[11px] font-bold px-3 py-1 rounded-lg transition-colors flex items-center gap-1.5 shrink-0 ml-2"
+          >
+            <RefreshCw className={cn("w-3 h-3", loading && "animate-spin")} />
+            Повторить
+          </button>
+        </div>
+      )}
+
+      {/* Main Dashboard Grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+        
+        {/* Left Column: Financial Outcome */}
+        <section className="xl:col-span-4 space-y-5">
+          <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-6 relative overflow-hidden shadow-2xl">
+            <div className={cn(
+              "absolute inset-0 opacity-15 blur-3xl transition-all duration-1000",
+              !calculations.hasValidTargetPrice ? "bg-zinc-700" : total > 0 ? "bg-emerald-500" : total < 0 ? "bg-rose-500" : "bg-blue-500"
+            )} />
+            
+            <div className="relative z-10 flex flex-col space-y-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Итоговый финансовый результат</p>
+                  <h2 className="text-base font-black text-white uppercase mt-0.5 flex items-center gap-2">
+                    {ticker}
+                    {isPerp && (
+                      <span className="px-2 py-0.5 bg-amber-500/20 border border-amber-500/40 text-amber-400 text-[9px] font-black rounded-md tracking-wider">
+                        ВЕЧНЫЙ ФЬЮЧЕРС
+                      </span>
+                    )}
+                  </h2>
                 </div>
-
-                <div className="text-center py-2">
-                  <p className={cn("text-5xl font-black font-mono tracking-tighter transition-all duration-500", total > 0 ? "text-emerald-400" : total < 0 ? "text-rose-400" : "text-white")}>
-                    {total > 0 ? '+' : ''}{formatMoney(total)}
-                    <span className="text-2xl ml-2 text-zinc-600">₽</span>
-                  </p>
-                  
-                  {details?.targetPrice && (validTradesMapped.length > 0) && (
-                    <div className="flex justify-center mt-2 animate-in fade-in zoom-in duration-500">
-                       <p className={cn("text-[10px] font-bold font-mono px-3 py-1 rounded-full backdrop-blur-sm border", Number(pointsDiff) > 0 ? "text-emerald-500/80 bg-emerald-500/10 border-emerald-500/20" : Number(pointsDiff) < 0 ? "text-rose-500/80 bg-rose-500/10 border-rose-500/20" : "text-zinc-400 bg-zinc-800/50 border-zinc-700/50")}>
-                         {Number(pointsDiff) > 0 ? '+' : ''}{pointsDiff} пунктов
-                       </p>
-                    </div>
-                  )}
-
-                  <div className="flex flex-col items-center gap-1 mt-4">
-                    <div className="flex items-center gap-1">
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-[0.2em]">
-                        {marketPhase.id === 'planned' ? 'Индикативная ВМ' : 'Вариационная маржа'}
-                      </p>
-                      <Tooltip 
-                        title="Что такое ВМ?" 
-                        content="Вариационная маржа — это ваша текущая прибыль или убыток. Она пересчитывается в реальном времени, но официально начисляется на счет только во время клиринга (в 00:30)."
-                      >
-                        <HelpCircle className="w-3 h-3 text-zinc-700 hover:text-blue-500 transition-colors" />
-                      </Tooltip>
-                    </div>
-                    <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-950/50 rounded-full border border-zinc-800/50">
-                      <div className={cn("w-1.5 h-1.5 rounded-full", 
-                        marketPhase.id === 'intraday' ? 'bg-blue-500' : 
-                        marketPhase.id === 'planned' ? 'bg-orange-500 animate-pulse' :
-                        marketPhase.id === 'clearing' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'
-                      )} />
-                      <span className="text-[9px] font-black text-zinc-400 uppercase tracking-tighter">{marketPhase.name}</span>
-                    </div>
-                  </div>
+                <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-950/80 rounded-full border border-zinc-800">
+                  <div className={cn("w-1.5 h-1.5 rounded-full", marketPhase.isTrading ? "bg-emerald-500" : "bg-amber-500")} />
+                  <span className="text-[9px] font-bold text-zinc-300 uppercase">{marketPhase.name.split(' ')[0]}</span>
                 </div>
+              </div>
 
-                <div className="mt-6 space-y-4">
-                   {(netPosition === 0 && pending === 0 && settledUnpaid === 0 && (!details || !details.currentTradesDetails || details.currentTradesDetails.length === 0)) ? (
-                      <div className="flex flex-col items-center justify-center p-4 rounded-2xl bg-zinc-950/80 border border-zinc-800/80 shadow-inner">
-                         <span className={cn("text-lg font-black tracking-tight", total > 0 ? "text-emerald-500" : total < 0 ? "text-rose-500" : "text-zinc-300")}>ОБЩИЙ РЕЗУЛЬТАТ: {total > 0 ? '+' : ''}{formatMoney(total)} ₽</span>
-                         <span className="text-zinc-500 text-[10px] mt-2 font-medium bg-zinc-900 px-3 py-1 rounded-full ring-1 ring-zinc-800">
-                            Финальный (зафиксировано)
-                         </span>
-                         {timeline && timeline.length > 0 && (
-                            <span className="text-emerald-500/80 text-[10px] font-medium mt-2 bg-emerald-500/10 px-2 py-0.5 rounded uppercase tracking-wider">
-                              Средства уже списаны/зачислены ({timeline[timeline.length - 1].date} 23:50)
-                            </span>
-                         )}
-                      </div>
-                   ) : (
-                     <div className="bg-zinc-950/60 border border-zinc-800/80 p-4 rounded-2xl shadow-inner space-y-3">
-                      <div className="flex justify-between items-end mb-2">
-                        <span className="text-zinc-400 text-xs font-bold uppercase tracking-widest">Общий результат</span>
-                        <span className={cn("text-lg font-black tracking-tight", total > 0 ? "text-emerald-500" : total < 0 ? "text-rose-500" : "text-white")}>
-                          {total > 0 ? '+' : ''}{formatMoney(total)} ₽
+              {/* Huge Result Number */}
+              <div className="text-center py-2 bg-zinc-950/70 border border-zinc-800/80 rounded-2xl p-4 shadow-inner">
+                <p className={cn(
+                  "text-4xl sm:text-5xl font-black font-mono tracking-tight transition-all",
+                  !calculations.hasValidTargetPrice ? "text-zinc-500 text-3xl sm:text-4xl" : total > 0 ? "text-emerald-400" : total < 0 ? "text-rose-400" : "text-white"
+                )}>
+                  {!calculations.hasValidTargetPrice ? (
+                    loading ? "Загрузка котировок..." : "0,00 ₽"
+                  ) : (
+                    <>
+                      {total > 0 ? '+' : ''}{formatMoney(total)}
+                      <span className="text-xl ml-1.5 text-zinc-500">₽</span>
+                    </>
+                  )}
+                </p>
+
+                <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
+                  {calculations.hasValidTargetPrice ? (
+                    <>
+                      <span className={cn(
+                        "text-[10px] font-bold font-mono px-2.5 py-1 rounded-full border",
+                        Number(pointsDiff) > 0 ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" : Number(pointsDiff) < 0 ? "text-rose-400 bg-rose-500/10 border-rose-500/20" : "text-zinc-400 bg-zinc-800 border-zinc-700"
+                      )}>
+                        {Number(pointsDiff) > 0 ? '+' : ''}{pointsDiff} пт (ВМ)
+                      </span>
+                      
+                      {isPerp && totalFunding !== 0 && (
+                        <span className={cn(
+                          "text-[10px] font-bold font-mono px-2.5 py-1 rounded-full border",
+                          totalFunding > 0 ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" : "text-amber-400 bg-amber-500/10 border-amber-500/20"
+                        )}>
+                          Своп: {totalFunding > 0 ? '+' : ''}{formatMoney(totalFunding)} ₽
                         </span>
-                      </div>
-                      <div>
-                        {(() => {
-                           const hasSettled = settled !== 0;
-                           const hasUnpaid = settledUnpaid !== 0;
-                           const hasPending = pending !== 0 || netPosition !== 0; // Always show pending if there's an open position
-                           const segmentsCount = (hasSettled ? 1 : 0) + (hasUnpaid ? 1 : 0) + (hasPending ? 1 : 0) || 1;
-                           const segWidth = `${100 / segmentsCount}%`;
-                           return (
-                             <>
-                                <div className="h-2 w-full bg-zinc-900 rounded-full flex overflow-hidden mb-2 shadow-inner">
-                                   {hasSettled && (
-                                     <div className="h-full bg-zinc-700 transition-all duration-500" style={{ width: segWidth }} />
-                                   )}
-                                   {hasUnpaid && (
-                                     <div className="h-full bg-blue-500/80 transition-all duration-500" style={{ width: segWidth }}>
-                                        <div className="w-full h-full opacity-20 bg-[repeating-linear-gradient(-45deg,transparent,transparent_4px,rgba(255,255,255,0.5)_4px,rgba(255,255,255,0.5)_8px)]" />
-                                     </div>
-                                   )}
-                                   {((hasPending) || (!hasSettled && !hasUnpaid)) && (
-                                     <div className={cn("h-full transition-all duration-500", pending > 0 ? "bg-emerald-500" : pending < 0 ? "bg-rose-500" : "bg-zinc-800")} style={{ width: segWidth }}>
-                                       {pending !== 0 && (
-                                         <div className="w-full h-full opacity-30 bg-[repeating-linear-gradient(-45deg,transparent,transparent_4px,rgba(255,255,255,0.5)_4px,rgba(255,255,255,0.5)_8px)]" />
-                                       )}
-                                     </div>
-                                   )}
-                                </div>
-                                <div className="flex justify-between items-start text-[11px] mt-2">
-                                  {hasSettled ? (
-                                    <div className="flex flex-col flex-1">
-                                      <span className="text-zinc-300 block font-medium tracking-tight mb-0.5">{formatMoney(settled)} ₽</span>
-                                      <span className="text-zinc-500 text-[9px] leading-[10px]">списано</span>
-                                    </div>
-                                  ) : <div className="flex-1" />}
-                                  {hasUnpaid ? (
-                                    <div className="flex flex-col flex-1 text-center border-l border-r border-zinc-800/50 px-2 mx-2">
-                                      <span className="text-blue-400 block font-medium tracking-tight mb-0.5">{settledUnpaid > 0 ? '+' : ''}{formatMoney(settledUnpaid)} ₽</span>
-                                      <span className="text-blue-500/70 text-[9px] leading-[10px]">расчетная<br/>(ожидает)</span>
-                                    </div>
-                                  ) : <div className="flex-1" />}
-                                  <div className="text-right flex flex-col flex-1">
-                                    <span className={cn("block font-medium tracking-tight mb-0.5", pending > 0 ? "text-emerald-500" : pending < 0 ? "text-rose-500" : "text-zinc-400")}>
-                                      {pending > 0 ? '+' : ''}{formatMoney(pending)} ₽
-                                    </span>
-                                    <span className={cn("text-[9px] leading-[10px] flex items-center justify-end", pending > 0 ? "text-emerald-500/70" : pending < 0 ? "text-rose-500/70" : "text-zinc-600")}>
-                                      предварительно <span className="text-[7px] leading-none opacity-80 mt-0.5 ml-1">▶</span>
-                                    </span>
-                                  </div>
-                                </div>
-                             </>
-                           );
-                        })()}
-                      </div>
-                      <div className="flex justify-between items-center text-[10px] bg-zinc-900/50 px-3 py-2 rounded-lg border border-zinc-800/80">
-                        <span className="text-zinc-500">Ближайшее списание (клиринг):</span>
-                        <span className="text-zinc-400 font-mono tracking-tighter">{getNextClearingTimeText()}</span>
-                      </div>
-                     </div>
-                   )}
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-[10px] text-zinc-500 font-medium">
+                      {loading ? "Получение данных с Мосбиржи..." : "Укажите цену для расчета"}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Margin & Funding Decomposition */}
+              <div className="bg-zinc-950/80 border border-zinc-800/90 rounded-2xl p-4 space-y-3">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-zinc-400 font-medium">Вариационная маржа (котировка):</span>
+                  <span className={cn("font-mono font-bold", totalVM > 0 ? "text-emerald-400" : totalVM < 0 ? "text-rose-400" : "text-zinc-300")}>
+                    {totalVM > 0 ? '+' : ''}{formatMoney(totalVM)} ₽
+                  </span>
                 </div>
 
-                   <div className="space-y-3 mt-4 bg-zinc-950/40 p-4 rounded-2xl border border-zinc-800/30">
-                  <div className="flex justify-between items-center text-[11px] text-zinc-500 h-[28px]">
-                    <div className="flex items-center gap-1 group">
-                      <span>Текущая рыночная цена (котировка):</span>
-                      <Tooltip title="Текущая рыночная цена" content="Текущая цена последней сделки на бирже. Можно изменить вручную для моделирования ситуаций (предварительного расчета).">
-                        <HelpCircle className="w-3 h-3 text-zinc-800 hover:text-blue-400 cursor-pointer" />
-                      </Tooltip>
-                    </div>
-                    <div className="relative">
-                      <input 
-                        type="number" 
-                        value={customPrice}
-                        onChange={(e) => setCustomPrice(e.target.value)}
-                        className="w-24 bg-zinc-900 border border-zinc-700/50 rounded text-right px-2 py-1 font-mono text-zinc-300 font-bold focus:outline-none focus:ring-1 focus:ring-blue-500/50 transition-all [&::-webkit-inner-spin-button]:appearance-none"
-                        placeholder={details?.targetPrice?.toString() || '0.00'}
-                        step="any"
-                      />
-                      {customPrice !== '' && (
-                         <button onClick={() => setCustomPrice('')} className="absolute right-[-20px] top-1.5 opacity-50 hover:opacity-100 transition-opacity">
-                           <X className="w-4 h-4 text-zinc-400" />
-                         </button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex justify-between text-[11px] text-zinc-500">
+                {isPerp && (
+                  <div className="flex justify-between items-center text-xs border-t border-zinc-800/60 pt-2">
                     <div className="flex items-center gap-1">
-                      <span>Чистая позиция:</span>
-                      <Tooltip title="Размер позиции" content="Показывает сколько контрактов (лотов) у вас на руках. Положительное значение — покупка, отрицательное — продажа.">
-                        <HelpCircle className="w-3 h-3 text-zinc-800 hover:text-blue-400 cursor-pointer" />
+                      <span className="text-zinc-400 font-medium">Накопленный фандинг (своп):</span>
+                      <Tooltip title="Фандинг вечного фьючерса" content="Сумма всех ежедневных начислений или списаний за перенос открытой позиции через клиринг 23:50.">
+                        <HelpCircle className="w-3 h-3 text-zinc-600 hover:text-amber-400 cursor-pointer" />
                       </Tooltip>
                     </div>
-                    <span className={cn("font-mono font-bold", netPosition > 0 ? "text-emerald-500" : netPosition < 0 ? "text-rose-500" : "text-zinc-500")}>
-                      {netPosition > 0 ? 'Покупка (Long)' : netPosition < 0 ? 'Продажа (Short)' : (validTradesMapped.length > 0 ? 'Закрыта (0)' : 'Нет позиции (0)')} [{Math.abs(netPosition)}]
+                    <span className={cn("font-mono font-bold", totalFunding > 0 ? "text-emerald-400" : totalFunding < 0 ? "text-rose-400" : "text-amber-400")}>
+                      {totalFunding > 0 ? '+' : ''}{formatMoney(totalFunding)} ₽
                     </span>
                   </div>
-                  {isPerp && funding && (
-                    <div className="flex justify-between text-[11px] text-zinc-500 pt-2 border-t border-zinc-800/50">
-                      <div className="flex items-center gap-1">
-                        <Info className="w-3 h-3 text-amber-500" /> 
-                        <span>Фандинг (накоп.):</span>
-                        <Tooltip title="Фандинг" content="Плата за перенос позиции по вечному фьючерсу. Если цена выше базового актива — платят покупатели, если ниже — продавцы.">
-                          <HelpCircle className="w-3 h-3 text-zinc-800 hover:text-amber-400 cursor-pointer" />
-                        </Tooltip>
-                      </div>
-                      {(() => {
-                        const val = details?.fundingTotal || 0;
-                        return (
-                          <span className={cn("font-mono font-bold", val > 0 ? "text-emerald-400" : val < 0 ? "text-rose-400" : "text-amber-400")}>
-                            {val > 0 ? '+' : ''}{formatMoney(val)} ₽
-                          </span>
-                        );
-                      })()}
-                    </div>
-                  )}
+                )}
+
+                <div className="flex justify-between items-center text-xs border-t border-zinc-800/60 pt-2">
+                  <span className="text-zinc-400 font-medium">Уже списано/зачислено (история):</span>
+                  <span className="font-mono font-bold text-zinc-300">
+                    {settled > 0 ? '+' : ''}{formatMoney(settled)} ₽
+                  </span>
                 </div>
 
-                <div className="flex gap-3 mt-6">
-                  <button 
-                    onClick={() => setIsDetailedBreakdownOpen(true)}
-                    disabled={!marketData}
-                    title="Показать детальную выписку"
-                    className={cn("h-14 w-14 flex items-center justify-center rounded-2xl flex-shrink-0 transition-all active:scale-95 border border-zinc-800 bg-zinc-900/80 text-zinc-400 shadow-xl", !marketData ? "opacity-20 cursor-not-allowed" : "hover:text-white hover:bg-zinc-800")}
-                  >
-                    <Info className="w-5 h-5" />
-                  </button>
-
-                  <button 
-                    id="copy-btn" onClick={handleCopy} disabled={!marketData}
-                    className={cn("flex-1 h-14 rounded-2xl flex items-center justify-center gap-3 font-black text-[10px] sm:text-xs transition-all active:scale-95 shadow-xl", copied ? "bg-emerald-600 text-white shadow-emerald-900/20" : "bg-white text-zinc-950 hover:bg-zinc-200 shadow-white/5 border border-white/10", !marketData && "opacity-20 cursor-not-allowed")}
-                  >
-                    {copied ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
-                    {copied ? 'Скопировано' : 'Поделиться отчетом'}
-                  </button>
+                <div className="flex justify-between items-center text-xs border-t border-zinc-800/60 pt-2">
+                  <span className="text-zinc-400 font-medium">Ожидает в текущей сессии:</span>
+                  <span className={cn("font-mono font-bold", pending > 0 ? "text-emerald-400" : pending < 0 ? "text-rose-400" : "text-zinc-400")}>
+                    {pending > 0 ? '+' : ''}{formatMoney(pending)} ₽
+                  </span>
                 </div>
-             </div>
-          </div>
+              </div>
 
-          {/* Market Data Indicators */}
-          <div className="bg-zinc-900/50 border border-zinc-800 rounded-3xl p-5 space-y-4 shadow-xl">
-             <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <h3 className="text-[10px] font-black text-zinc-500">Индикаторы</h3>
-                  <Tooltip title="Рыночные котировки" content="Здесь отображаются данные с биржи в реальном времени. Можно переключаться между текущим рынком и результатами последнего клиринга.">
-                    <HelpCircle className="w-3 h-3 text-zinc-800 hover:text-blue-500 cursor-pointer" />
-                  </Tooltip>
-                </div>
-                {lastUpdateTime && (
-                  <div className="flex flex-col items-end">
-                    {isStale ? (
+              {/* Simulation / Interactive Price Override */}
+              <div className="space-y-3 bg-zinc-950/60 p-4 rounded-2xl border border-zinc-800/70">
+                <div className="flex justify-between items-center text-xs">
+                  <div className="flex items-center gap-1">
+                    <span className="text-zinc-400 font-medium">Расчетная цена / Текущая:</span>
+                    <Tooltip title="Моделирование цены" content="Вы можете ввести любую свою цену для расчета сценария «Что если цена изменится до...»">
+                      <HelpCircle className="w-3 h-3 text-zinc-600 hover:text-blue-400 cursor-pointer" />
+                    </Tooltip>
+                  </div>
+                  <div className="relative">
+                    <input 
+                      type="text" 
+                      inputMode="decimal"
+                      value={customPrice}
+                      onChange={(e) => setCustomPrice(e.target.value)}
+                      placeholder={details?.targetPrice ? String(details.targetPrice) : "0.00"}
+                      className="w-28 bg-zinc-900 border border-zinc-700/70 rounded-lg text-right px-2.5 py-1 font-mono text-white font-bold focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs"
+                    />
+                    {customPrice !== '' && (
                       <button 
-                        onClick={() => fetchMarketData(ticker)}
-                        className="flex items-center gap-1 group/stale text-rose-500 hover:text-rose-400 transition-colors"
+                        onClick={() => setCustomPrice('')} 
+                        className="absolute -right-6 top-1 text-zinc-400 hover:text-white"
+                        title="Сбросить к рыночной цене"
                       >
-                        <AlertTriangle className="w-2.5 h-2.5" />
-                        <span className="text-[8px] font-black underline decoration-rose-500/30">Данные устарели! Обновить?</span>
+                        <X className="w-3.5 h-3.5" />
                       </button>
-                    ) : (
-                      <p className="text-[8px] font-bold text-zinc-700">Обновлено: {lastUpdateTime}</p>
                     )}
                   </div>
-                )}
-                <div className="flex bg-zinc-950 rounded-lg p-0.5 border border-zinc-800">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 m-1" />
                 </div>
-             </div>
-             
-             {marketData && (
-                 <div className="grid grid-cols-2 gap-2 text-[10px]">
-                    <div className="bg-zinc-950 border border-zinc-800/50 rounded-xl p-3">
-                      <p className="text-zinc-500 font-bold uppercase mb-1 whitespace-nowrap overflow-hidden text-ellipsis" title="Текущая рыночная котировка">Текущая рыночная котировка</p>
-                      <p className="font-mono text-white text-lg font-black">{marketData.last}</p>
-                    </div>
-                    <div className="bg-zinc-950 border border-zinc-800/50 rounded-xl p-3">
-                      <p className="text-zinc-500 font-bold uppercase mb-1 whitespace-nowrap overflow-hidden text-ellipsis" title="Расчетная цена последнего клиринга">Расчетная цена последнего клиринга</p>
-                      <p className="font-mono text-zinc-400 text-lg font-bold">{marketData.prevSettlePrice}</p>
-                    </div>
-                    <div className="bg-blue-600/5 border border-blue-600/10 rounded-xl p-3 col-span-2 flex justify-between items-center">
-                      <div>
-                        <div className="flex items-center gap-1 mb-0.5">
-                          <p className="text-blue-500 font-bold uppercase text-[9px]">Последнее значение Расчетной цены*</p>
-                          <Tooltip title="Последнее значение Расчетной цены" content="Последнее опубликованное значение расчетной цены. Новое значение публикуется в ходе вечерней торговой сессии после его определения (после 19:00).">
-                            <HelpCircle className="w-2.5 h-2.5 text-blue-500/50" />
-                          </Tooltip>
-                        </div>
-                        <p className="font-mono text-white text-xl font-black">{marketData.settlePrice || '---'}</p>
-                      </div>
-                      <AlertTriangle className="w-5 h-5 text-blue-500/30" />
-                    </div>
-                 </div>
-             )}
+
+                <div className="flex justify-between items-center text-xs border-t border-zinc-800/50 pt-2">
+                  <span className="text-zinc-400 font-medium">Чистая позиция:</span>
+                  <span className={cn(
+                    "font-mono font-black",
+                    netPosition > 0 ? "text-emerald-400" : netPosition < 0 ? "text-rose-400" : "text-zinc-400"
+                  )}>
+                    {netPosition > 0 ? `▲ Long (${netPosition} лот.)` : netPosition < 0 ? `▼ Short (${Math.abs(netPosition)} лот.)` : 'Закрыта (0)'}
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center text-xs border-t border-zinc-800/50 pt-2">
+                  <span className="text-zinc-400 font-medium">Средняя цена входа:</span>
+                  <span className="font-mono font-bold text-zinc-300">{avgEntry}</span>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-1">
+                <button 
+                  onClick={() => setIsDetailedBreakdownOpen(true)}
+                  disabled={!marketData}
+                  className="h-12 w-12 flex items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all active:scale-95 shadow-lg shrink-0"
+                  title="Детальная выписка"
+                >
+                  <Layers className="w-5 h-5 text-blue-400" />
+                </button>
+
+                <button 
+                  id="copy-btn" 
+                  onClick={handleCopy} 
+                  disabled={!marketData}
+                  className={cn(
+                    "flex-1 h-12 rounded-xl flex items-center justify-center gap-2.5 font-black text-xs transition-all active:scale-95 shadow-xl",
+                    copied ? "bg-emerald-600 text-white" : "bg-white text-zinc-950 hover:bg-zinc-200"
+                  )}
+                >
+                  {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  {copied ? 'Отчет скопирован' : 'Поделиться отчетом'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Market Specs Card */}
+          <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-5 space-y-3.5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-black uppercase text-zinc-400 tracking-wider">Параметры инструмента (ФОРТС)</h3>
+              <span className="text-[10px] text-zinc-500 font-mono">{lastUpdateTime ? `Обновлено: ${lastUpdateTime}` : ''}</span>
+            </div>
+
+            {marketData ? (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3">
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase mb-1">Котировка (Last)</p>
+                  <p className="font-mono text-white text-base font-black">{marketData.last}</p>
+                </div>
+                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-3">
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase mb-1">РЦ Пред. Клиринга</p>
+                  <p className="font-mono text-amber-400 text-base font-black">{marketData.prevSettlePrice}</p>
+                </div>
+                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5">
+                  <p className="text-[9px] text-zinc-500 font-bold uppercase mb-0.5">Шаг цены</p>
+                  <p className="font-mono text-zinc-300 text-xs font-bold">{marketData.minStep}</p>
+                </div>
+                <div className="bg-zinc-950 border border-zinc-800/80 rounded-xl p-2.5">
+                  <p className="text-[9px] text-zinc-500 font-bold uppercase mb-0.5">Стоимость шага</p>
+                  <p className="font-mono text-zinc-300 text-xs font-bold">{marketData.stepPrice} ₽</p>
+                </div>
+              </div>
+            ) : (
+              <div className="py-6 text-center text-zinc-500 text-xs">Загрузка спецификации...</div>
+            )}
           </div>
         </section>
 
-        {/* Middle Column: Trades List */}
-        <section className="xl:col-span-4 space-y-4">
-           <div className="bg-zinc-900/50 border border-zinc-800 rounded-3xl p-5 flex flex-col shadow-xl h-full">
-              <div className="flex items-center justify-between mb-4 pb-3 border-b border-zinc-800/50">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
-                  <h3 className="text-[10px] font-black uppercase text-zinc-400 tracking-widest">Портфель</h3>
-                  <Tooltip title="Ваш реестр сделок" content="Этот список показывает все ваши позиции. Если сделка совершена в прошлые дни, она учитывается по цене последнего клиринга.">
-                    <HelpCircle className="w-3 h-3 text-zinc-800 hover:text-blue-500 cursor-pointer" />
-                  </Tooltip>
-                </div>
-                <div className="flex items-center gap-2">
-                  {showClearConfirm ? (
-                    <div className="flex items-center gap-1 bg-rose-500/10 border border-rose-500/20 px-2 py-1.5 rounded-lg animate-in zoom-in slide-in-from-right-2 duration-200">
-                      <span className="text-[9px] text-rose-500 font-bold uppercase tracking-tighter mr-1">Точно?</span>
-                      <button onClick={performClearAll} className="text-[9px] bg-rose-500 text-white px-2 py-0.5 rounded font-bold hover:bg-rose-600 transition-colors">Да</button>
-                      <button onClick={() => setShowClearConfirm(false)} className="text-[9px] bg-zinc-800 text-zinc-300 px-2 py-0.5 rounded font-bold hover:bg-zinc-700 transition-colors">Нет</button>
+        {/* Middle Column: Trade Management */}
+        <section className="xl:col-span-4 space-y-5">
+          <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-5 flex flex-col shadow-xl h-full">
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-zinc-800/60">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.6)]" />
+                <h3 className="text-xs font-black uppercase text-zinc-300 tracking-wider">
+                  Реестр сделок ({validTradesMapped.length})
+                </h3>
+              </div>
+              <div className="flex items-center gap-2">
+                {showClearConfirm ? (
+                  <div className="flex items-center gap-1 bg-rose-500/20 border border-rose-500/30 px-2 py-1 rounded-lg">
+                    <span className="text-[10px] text-rose-400 font-bold mr-1">Очистить?</span>
+                    <button onClick={performClearAll} className="text-[10px] bg-rose-600 text-white px-2 py-0.5 rounded font-bold hover:bg-rose-500">Да</button>
+                    <button onClick={() => setShowClearConfirm(false)} className="text-[10px] bg-zinc-800 text-zinc-300 px-2 py-0.5 rounded font-bold">Нет</button>
+                  </div>
+                ) : (
+                  <button 
+                    onClick={() => setShowClearConfirm(true)}
+                    className="text-[10px] font-bold text-zinc-500 hover:text-rose-400 uppercase transition-colors"
+                  >
+                    Очистить
+                  </button>
+                )}
+                <button 
+                  id="add-trade-btn" 
+                  onClick={addTrade}
+                  className="text-[10px] font-black uppercase px-3 py-1.5 rounded-xl bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-all active:scale-95 border border-blue-500/30 flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Сделка
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-3.5 overflow-y-auto max-h-[640px] pr-1">
+              {trades.map((trade, i) => (
+                <TradeCard
+                  key={trade.id}
+                  trade={trade}
+                  index={i}
+                  totalCount={trades.length}
+                  suggestedPrice={historyMap.get(trade.date)}
+                  onUpdate={updateTrade}
+                  onRemove={removeTrade}
+                />
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* Right Column: Clearing Journal & Funding Breakdown */}
+        <section className="xl:col-span-4 space-y-5">
+          {/* Clearing Journal Card */}
+          <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-5 shadow-xl flex flex-col">
+            <div className="flex items-center justify-between mb-3.5">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-blue-400" />
+                <h3 className="text-xs font-black uppercase text-zinc-200 tracking-wider">
+                  Журнал клирингов
+                </h3>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-950 text-zinc-400 border border-zinc-800">
+                  {timeline.length} дн.
+                </span>
+                <Tooltip title="История ежедневных расчетов" content="Здесь показаны официальные клиринги Мосбиржи за каждый торговый день: расчетная цена, вариационная маржа и ставка фандинга.">
+                  <HelpCircle className="w-3.5 h-3.5 text-zinc-600 hover:text-blue-400 cursor-pointer" />
+                </Tooltip>
+              </div>
+
+              {/* Refresh history button */}
+              <button 
+                onClick={() => {
+                  hapticFeedback('light');
+                  const validTrades = trades.filter(t => t.date);
+                  const earliest = validTrades.reduce((min, tr) => {
+                    const iso = normalizeDateToISO(tr.date);
+                    return (iso && iso < min) ? iso : min;
+                  }, '2023-01-01');
+                  const fromDate = earliest < '2023-01-01' ? earliest : '2023-01-01';
+                  fetchHistoryOnly(ticker, fromDate);
+                }}
+                disabled={historyLoading}
+                title="Обновить историю клирингов MOEX"
+                className="text-[10px] font-bold text-zinc-400 hover:text-white bg-zinc-950 px-2.5 py-1 rounded-lg border border-zinc-800 hover:border-zinc-700 transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-50"
+              >
+                <RefreshCw className={cn("w-3 h-3 text-blue-400", historyLoading && "animate-spin")} />
+                <span>MOEX ISS</span>
+              </button>
+            </div>
+
+            {/* Filter Pills */}
+            {timeline.length > 0 && (
+              <div className="flex items-center gap-1.5 mb-3 overflow-x-auto pb-1">
+                <button
+                  type="button"
+                  onClick={() => { setClearingFilter('all'); setClearingVisibleCount(20); }}
+                  className={cn(
+                    "text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all shrink-0 border",
+                    clearingFilter === 'all' 
+                      ? "bg-blue-600/30 text-blue-300 border-blue-500/50" 
+                      : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-white"
+                  )}
+                >
+                  Все ({timeline.length})
+                </button>
+
+                {isPerp && swapDaysCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => { setClearingFilter('swap'); setClearingVisibleCount(20); }}
+                    className={cn(
+                      "text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all shrink-0 border",
+                      clearingFilter === 'swap' 
+                        ? "bg-amber-500/20 text-amber-300 border-amber-500/50" 
+                        : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-amber-400"
+                    )}
+                  >
+                    Со свопом ({swapDaysCount})
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => { setClearingFilter('profit'); setClearingVisibleCount(20); }}
+                  className={cn(
+                    "text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all shrink-0 border",
+                    clearingFilter === 'profit' 
+                      ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/50" 
+                      : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-emerald-400"
+                  )}
+                >
+                  + Прибыль
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => { setClearingFilter('loss'); setClearingVisibleCount(20); }}
+                  className={cn(
+                    "text-[10px] font-bold px-2.5 py-1 rounded-lg transition-all shrink-0 border",
+                    clearingFilter === 'loss' 
+                      ? "bg-rose-500/20 text-rose-300 border-rose-500/50" 
+                      : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-rose-400"
+                  )}
+                >
+                  - Списания
+                </button>
+              </div>
+            )}
+
+            {/* List of Clearing Sessions */}
+            <div className="space-y-2 overflow-y-auto pr-1 max-h-[520px]">
+              {displayedTimeline.length > 0 ? (
+                displayedTimeline.map((h) => {
+                  const dayOfWeek = getDayOfWeekStr(h.date);
+                  return (
+                    <div key={h.date} className="bg-zinc-950 p-3 rounded-xl border border-zinc-800/80 flex justify-between items-center hover:bg-zinc-900/90 transition-colors">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="text-xs font-bold text-white font-mono">{h.date}</p>
+                          {dayOfWeek && (
+                            <span className="text-[9px] font-bold text-zinc-400 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800">
+                              {dayOfWeek}
+                            </span>
+                          )}
+                          <span className="text-[9px] text-zinc-500 font-mono">23:50</span>
+                          <span className={cn(
+                            "text-[9px] font-bold px-1.5 py-0.5 rounded border font-mono",
+                            h.netPos > 0 ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : h.netPos < 0 ? "bg-rose-500/10 text-rose-400 border-rose-500/20" : "bg-zinc-900 text-zinc-400 border-zinc-800"
+                          )}>
+                            {Math.abs(h.netPos)} лот. {h.netPos > 0 ? 'Long' : h.netPos < 0 ? 'Short' : 'Закрыта'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 text-[10px] text-zinc-500 font-mono">
+                          <span>РЦ: {h.settlePrice}</span>
+                          {isPerp && h.swapRate !== undefined && h.swapRate !== 0 && (
+                            <span className={cn(h.swapRate > 0 ? "text-amber-400/90" : "text-emerald-400/90")}>
+                              Своп: {h.swapRate} ({formatMoney(h.dailyFunding)} ₽)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <div className="text-right">
+                        <p className={cn(
+                          "text-xs font-black font-mono",
+                          h.dailyTotal > 0 ? "text-emerald-400" : h.dailyTotal < 0 ? "text-rose-400" : "text-zinc-500"
+                        )}>
+                          {h.dailyTotal > 0 ? '+' : ''}{formatMoney(h.dailyTotal)} ₽
+                        </p>
+                        <p className="text-[9px] text-zinc-500">
+                          {h.dailyFunding !== 0 ? `ВМ: ${h.dailyVM > 0 ? '+' : ''}${formatMoney(h.dailyVM)} ₽` : 'зачислено в клиринг'}
+                        </p>
+                      </div>
                     </div>
-                  ) : (
-                    <button 
-                      onClick={clearAllTrades}
-                      className="text-[9px] font-black text-zinc-600 hover:text-rose-500 uppercase tracking-tighter transition-colors"
+                  );
+                })
+              ) : (
+                <div className="flex flex-col items-center justify-center py-10 text-zinc-600 gap-2">
+                  <AlertTriangle className="w-8 h-8 opacity-40 text-amber-500" />
+                  <p className="text-xs font-bold uppercase">
+                    {historyLoading ? 'Загрузка истории клирингов...' : 'Сессии не найдены'}
+                  </p>
+                  <p className="text-[10px] text-zinc-500 text-center max-w-[240px]">
+                    {clearingFilter !== 'all' 
+                      ? 'По выбранному фильтру нет клиринговых сессий.' 
+                      : 'Проверьте дату и параметры сделок выше.'}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Pagination Controls */}
+            {filteredTimeline.length > 20 && (
+              <div className="mt-3 pt-3 border-t border-zinc-800/80 flex flex-col gap-2">
+                <div className="flex items-center justify-between text-[10px] text-zinc-500">
+                  <span>Показано: <strong className="text-zinc-300">{displayedTimeline.length}</strong> из <strong className="text-zinc-300">{filteredTimeline.length}</strong> сессий</span>
+                  {clearingVisibleCount > 20 && (
+                    <button
+                      type="button"
+                      onClick={() => setClearingVisibleCount(20)}
+                      className="text-blue-400 hover:text-blue-300 font-bold"
                     >
-                      Очистить всё
+                      Свернуть до 20
                     </button>
                   )}
-                  <button 
-                    id="add-trade-btn" onClick={addTrade}
-                    className="text-[10px] font-black uppercase px-3 py-1.5 rounded-xl bg-blue-600/10 text-blue-400 hover:bg-blue-600/20 transition-all active:scale-95 border border-blue-500/10"
-                  >
-                    <Plus className="w-3 h-3 inline mr-1" /> Добавить
-                  </button>
                 </div>
-              </div>
 
-              <div className="flex-1 space-y-3 overflow-y-auto max-h-[600px] pr-1 custom-scrollbar">
-                {trades.map((trade, i) => (
-                  <TradeCard
-                    key={trade.id}
-                    trade={trade}
-                    index={i}
-                    totalCount={trades.length}
-                    onUpdate={updateTrade}
-                    onRemove={removeTrade}
-                  />
-                ))}
-              </div>
-           </div>
-        </section>
-
-        {/* Right Column: Log & Config */}
-        <section className="xl:col-span-4 space-y-4">
-           <div className="bg-zinc-900/50 border border-zinc-800 rounded-3xl p-5 shadow-xl h-[45%] flex flex-col">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-1.5">
-                  <h3 className="text-[10px] font-black uppercase text-zinc-500 tracking-widest">Журнал клирингов</h3>
-                  <Tooltip title="История расчетов" content="Тут показано, сколько денег биржа списывала или начисляла вам каждый вечер. Помогает следить за итоговым результатом.">
-                    <HelpCircle className="w-3 h-3 text-zinc-800 hover:text-blue-500 cursor-pointer" />
-                  </Tooltip>
-                </div>
-                <Info className="w-3.5 h-3.5 text-zinc-700" />
-              </div>
-              <div className="flex-1 space-y-2 overflow-y-auto pr-1 custom-scrollbar">
-                {timeline.length > 0 ? (
-                  timeline.map((h) => (
-                    <div key={h.date} className="bg-zinc-950 p-3 rounded-xl border border-zinc-800/50 flex justify-between items-center transition-all hover:bg-zinc-900">
-                      <div>
-                        <p className="text-[9px] font-bold text-zinc-200">{h.date} 23:50</p>
-                        <p className="text-[8px] text-zinc-600 font-mono">РЦ: {h.settlePrice}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className={cn("text-[11px] font-black font-mono", h.dailyVM > 0 ? "text-emerald-500" : h.dailyVM < 0 ? "text-rose-500" : "text-zinc-600")}>
-                          {h.dailyVM > 0 ? '+' : ''}{formatMoney(h.dailyVM)} ₽
-                        </p>
-                        <p className="text-[8px] text-zinc-500 font-medium">уже зачислено</p>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-full opacity-30 gap-2">
-                    <Trash2 className="w-8 h-8" />
-                    <p className="text-[9px] font-bold uppercase">История не найдена</p>
-                  </div>
-                )}
-              </div>
-           </div>
-
-           <div className="bg-zinc-900/50 border border-zinc-800 rounded-3xl p-5 shadow-xl h-[53%] flex flex-col justify-between">
-              <div>
-                <h3 className="text-[10px] font-black uppercase text-zinc-500 tracking-widest mb-6">Настройка инструмента</h3>
-                
-                <div className="space-y-6">
-                  <div className="flex items-center justify-between py-2 border-b border-zinc-800/50">
-                    <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
-                        <p className="text-xs font-black text-white uppercase tracking-tight">Тип контракта</p>
-                        <Tooltip title="Магия вечности" content="Приложение автоматически определяет вечные фьючерсы по тикеру. Для них учитывается фандинг.">
-                          <HelpCircle className="w-3 h-3 text-zinc-700" />
-                        </Tooltip>
-                      </div>
-                      <p className="text-[9px] text-zinc-600 font-bold uppercase">
-                        {isPerp ? "Обнаружен вечный фьючерс" : "Стандартный контракт"}
-                      </p>
-                    </div>
-                    <div className={cn("px-3 py-1 rounded-full text-[9px] font-black uppercase transition-all duration-500", isPerp ? "bg-amber-500/20 text-amber-500 border border-amber-500/30" : "bg-zinc-800/50 text-zinc-500 border border-zinc-800")}>
-                      {isPerp ? "Вечный" : "Срочный"}
-                    </div>
-                  </div>
-
-                  {isPerp && (
-                    <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded-2xl flex justify-between items-center animate-in fade-in zoom-in duration-500">
-                      <div className="space-y-1 w-full">
-                        <div className="flex justify-between items-center w-full">
-                          <p className="text-[8px] font-bold text-amber-600/50 uppercase tracking-widest">Ставка фандинга</p>
-                          <TrendingUp className="w-4 h-4 text-amber-500/30" />
-                        </div>
-                        <div className="flex items-center mt-1">
-                          <input 
-                            type="number"
-                            step="0.01"
-                            value={funding}
-                            onChange={(e) => setFunding(e.target.value)}
-                            placeholder="0.00"
-                            className="bg-transparent border-none text-xs font-mono text-amber-500 font-black focus:ring-0 p-0 w-20 outline-none"
-                          />
-                          <span className="text-[10px] text-amber-500 font-black">₽/лот</span>
-                        </div>
-                      </div>
-                    </div>
+                <div className="flex items-center gap-2">
+                  {clearingVisibleCount < filteredTimeline.length && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setClearingVisibleCount(prev => Math.min(filteredTimeline.length, prev + 50))}
+                        className="flex-1 bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-white text-[11px] font-bold py-2 rounded-xl transition-all active:scale-98"
+                      >
+                        + Показать еще 50
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setClearingVisibleCount(filteredTimeline.length)}
+                        className="bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-[11px] font-bold py-2 px-3 rounded-xl transition-all active:scale-98"
+                      >
+                        Все ({filteredTimeline.length})
+                      </button>
+                    </>
                   )}
-
-                  <div className="p-4 bg-blue-500/5 border border-blue-500/10 rounded-2xl space-y-2 relative overflow-hidden">
-                    <div className="absolute top-0 right-0 p-2 opacity-10">
-                      <HelpCircle className="w-8 h-8 text-blue-500" />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <AlertTriangle className="w-3.5 h-3.5 text-blue-400" />
-                      <p className="text-[9px] text-blue-400 font-black uppercase">УВЕДОМЛЕНИЕ РЫНКА ETS 2026</p>
-                    </div>
-                    <p className="text-[10px] text-zinc-400 leading-relaxed font-medium">
-                      {marketPhase.description}
-                    </p>
-                    <p className="text-[9px] text-zinc-500 leading-relaxed italic border-t border-zinc-800/50 pt-2">
-                      Основной клиринг: 23:50–00:30. Цены фиксируются в 19:00 MSK.
-                    </p>
-                  </div>
                 </div>
               </div>
-           </div>
+            )}
+          </div>
+
+          {/* Funding Mechanics Explanation Card */}
+          <div className="bg-zinc-900/60 border border-zinc-800 rounded-3xl p-5 shadow-xl space-y-3.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-black uppercase text-zinc-400 tracking-wider">
+                Механика вечного фьючерса
+              </h3>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 font-bold">
+                ETS ФОРТС
+              </span>
+            </div>
+
+            <div className="space-y-2.5 text-xs text-zinc-400 leading-relaxed bg-zinc-950 p-4 rounded-2xl border border-zinc-800/60">
+              <p>
+                <strong className="text-white">Клиринг в 23:50 МСК:</strong> Каждый вечер позиция переоценивается по Расчетной Цене (РЦ), а накопленная за день ВМ зачисляется или списывается со счета.
+              </p>
+              <p>
+                <strong className="text-white">Фандинг (Своп-ставка):</strong> Обеспечивает схождение цены фьючерса со спот-курсом. При положительном свопе покупатели (Long) платят продавцам (Short). При отрицательном — наоборот.
+              </p>
+            </div>
+          </div>
         </section>
+
       </div>
-      <SplashScreen />
-      <InstructionsModal isOpen={isInstructionsOpen} onClose={() => setIsInstructionsOpen(false)} />
+
+      {/* Modals */}
+      <InstructionsModal 
+        isOpen={isInstructionsOpen} 
+        onClose={() => setIsInstructionsOpen(false)} 
+      />
+
       <DetailedBreakdownModal 
         isOpen={isDetailedBreakdownOpen} 
         onClose={() => setIsDetailedBreakdownOpen(false)} 
-        marketData={marketData} 
-        calculations={calculations} 
-        ticker={ticker} 
-        isPerp={isPerp} 
+        marketData={marketData}
+        calculations={calculations}
+        ticker={ticker}
+        isPerp={isPerp}
       />
     </main>
   );

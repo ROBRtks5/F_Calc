@@ -3,7 +3,11 @@ import { CapacitorConfig } from '@capacitor/cli';
 const config: CapacitorConfig = {
   appId: 'com.moex.vmcalc',
   appName: 'FC MOEX',
-  webDir: 'out',
+  webDir: 'public',
+  server: {
+    androidScheme: 'https',
+    cleartext: true,
+  },
   plugins: {
     SplashScreen: {
       launchShowDuration: 1500,

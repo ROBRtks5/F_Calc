@@ -1,6 +1,7 @@
+'use client';
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { createPortal } from 'react-dom';
 
 export const Tooltip = ({ title, content, children }: { title: string, content: string, children: React.ReactNode }) => {
@@ -8,7 +9,6 @@ export const Tooltip = ({ title, content, children }: { title: string, content: 
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
   }, []);
 
