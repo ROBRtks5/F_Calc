@@ -42,16 +42,14 @@ export const TradeCard = memo(({
             {trade.type === 'Long' ? '▲ Покупка (Long)' : '▼ Продажа (Short)'}
           </button>
         </div>
-        {totalCount > 1 && (
-          <button 
-            type="button"
-            onClick={() => onRemove(trade.id)} 
-            className="w-8 h-8 flex items-center justify-center text-zinc-500 hover:text-rose-400 transition-colors bg-zinc-900/80 hover:bg-rose-950/40 rounded-lg border border-zinc-800"
-            title="Удалить сделку"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        )}
+        <button 
+          type="button"
+          onClick={() => onRemove(trade.id)} 
+          className="w-8 h-8 flex items-center justify-center text-zinc-500 hover:text-rose-400 transition-colors bg-zinc-900/80 hover:bg-rose-950/40 rounded-lg border border-zinc-800"
+          title="Удалить сделку"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       <div className="space-y-1">

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { Search, Copy, Check, TrendingUp, RefreshCw, AlertTriangle, Info, Plus, Trash2, HelpCircle, X, ChevronDown, ChevronUp, Sparkles, Layers, Database, Calendar, Filter, ArrowUpDown } from 'lucide-react';
+import { Search, Copy, Check, TrendingUp, RefreshCw, AlertTriangle, Info, Plus, Trash2, HelpCircle, X, ChevronDown, ChevronUp, Sparkles, Layers, Database, Calendar, Filter, ArrowUpDown, RotateCcw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -12,7 +12,16 @@ import { SplashScreen } from './components/SplashScreen';
 import { InstructionsModal } from './components/InstructionsModal';
 import { DetailedBreakdownModal } from './components/DetailedBreakdownModal';
 import { generateVMReport } from './lib/reportGenerator';
-import { getPreloadedHistory, normalizeDateToISO, MoexHistoryRecord } from './lib/moexData';
+import { 
+  getPreloadedHistory, 
+  normalizeDateToISO, 
+  MoexHistoryRecord, 
+  fetchMoexQuote, 
+  fetchMoexHistory, 
+  fetchMoexSecurities, 
+  FORTS_PRELOADED_SECURITIES,
+  DEFAULT_KNOWN_SPECS
+} from './lib/moexData';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 const formatMoney = (val: number) => {
@@ -159,27 +168,23 @@ export default function Home() {
     setIsSyncing(true);
     setError(null);
     try {
-      const res = await fetch('/api/moex/securities');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.list && data.list.length > 0) {
-          setAllInstruments({ list: data.list, synced: true });
-          localStorage.setItem('moex_instruments', JSON.stringify(data.list));
-        }
+      const list = await fetchMoexSecurities();
+      if (list && list.length > 0) {
+        setAllInstruments({ list, synced: true });
+        localStorage.setItem('moex_instruments', JSON.stringify(list));
+        showToast(`База ФОРТС обновлена: ${list.length} инструментов`);
       }
     } catch (err: any) {
       console.error('Failed to sync securities:', err);
     } finally {
       setIsSyncing(false);
     }
-  }, []);
+  }, [showToast]);
 
   // Save trades to localStorage on change
   useEffect(() => {
     try {
-      if (trades.length > 0) {
-        localStorage.setItem('moex_trades_v2', JSON.stringify(trades));
-      }
+      localStorage.setItem('moex_trades_v2', JSON.stringify(trades));
     } catch {}
   }, [trades]);
 
@@ -253,19 +258,16 @@ export default function Home() {
 
     try {
       const fromDate = fromOverride || '2023-01-01';
-      const histRes = await fetch(`/api/moex/history?ticker=${sym}&from=${fromDate}`);
-      if (histRes.ok) {
-        const histJson = await histRes.json();
-        if (histJson.history && histJson.history.length > 0) {
-          setHistoryData(histJson.history);
-          setHistoryStatus('success');
-          try {
-            localStorage.setItem(`moex_history_v4_${sym}`, JSON.stringify(histJson.history));
-          } catch {}
-          const swapCount = histJson.history.filter((x: any) => x.swapRate !== 0).length;
-          showToast(`MOEX ISS: загружено ${histJson.history.length} клирингов (свопов: ${swapCount})`);
-          return histJson.history;
-        }
+      const history = await fetchMoexHistory(sym, fromDate);
+      if (history && history.length > 0) {
+        setHistoryData(history);
+        setHistoryStatus('success');
+        try {
+          localStorage.setItem(`moex_history_v4_${sym}`, JSON.stringify(history));
+        } catch {}
+        const swapCount = history.filter((x: any) => x.swapRate !== 0).length;
+        showToast(`MOEX ISS: загружено ${history.length} клирингов (свопов: ${swapCount})`);
+        return history;
       }
     } catch (err: any) {
       console.error('History fetch error:', err);
@@ -285,7 +287,7 @@ export default function Home() {
     return null;
   }, [showToast]);
 
-  // Main fetch function using server-side API proxy with parallel queries
+  // Main fetch function using direct MOEX ISS calls with server proxy fallback
   const fetchMarketData = useCallback(async (targetTicker: string, overrideTrades?: Trade[]) => {
     const sym = (targetTicker || 'USDRUBF').toUpperCase().trim();
     if (!sym) return;
@@ -311,33 +313,29 @@ export default function Home() {
       const fromDate = earliestTradeDate < '2023-01-01' ? earliestTradeDate : '2023-01-01';
 
       // 3. Parallel fetch of live quotes and historical records
-      const [quoteResult, histResult] = await Promise.allSettled([
-        fetch(`/api/moex?ticker=${sym}`),
-        fetch(`/api/moex/history?ticker=${sym}&from=${fromDate}`)
+      const [quoteData, historyDataRes] = await Promise.all([
+        fetchMoexQuote(sym),
+        fetchMoexHistory(sym, fromDate)
       ]);
 
-      if (quoteResult.status === 'fulfilled' && quoteResult.value.ok) {
-        const quoteData = await quoteResult.value.json();
+      if (quoteData) {
         setMarketData(quoteData);
         try {
           localStorage.setItem(`moex_market_data_${sym}`, JSON.stringify(quoteData));
         } catch {}
-        setLastUpdateTime(new Date().toLocaleTimeString('ru-RU'));
+        setLastUpdateTime(quoteData.updateTime || new Date().toLocaleTimeString('ru-RU'));
         setLastUpdateTimestamp(Date.now());
         if (quoteData.funding !== undefined && quoteData.funding !== 0) {
           setFunding(String(quoteData.funding));
         }
       }
 
-      if (histResult.status === 'fulfilled' && histResult.value.ok) {
-        const histJson = await histResult.value.json();
-        if (histJson.history && histJson.history.length > 0) {
-          setHistoryData(histJson.history);
-          setHistoryStatus('success');
-          try {
-            localStorage.setItem(`moex_history_v4_${sym}`, JSON.stringify(histJson.history));
-          } catch {}
-        }
+      if (historyDataRes && historyDataRes.length > 0) {
+        setHistoryData(historyDataRes);
+        setHistoryStatus('success');
+        try {
+          localStorage.setItem(`moex_history_v4_${sym}`, JSON.stringify(historyDataRes));
+        } catch {}
       }
     } catch (err: any) {
       console.error('Fetch error:', err);
@@ -356,22 +354,31 @@ export default function Home() {
       
       try {
         const savedTicker = localStorage.getItem('moex_last_ticker');
-        if (savedTicker) {
+        if (savedTicker !== null) {
           targetTicker = savedTicker;
           if (mounted) setTicker(savedTicker);
-          const cached = localStorage.getItem(`moex_market_data_${savedTicker}`);
-          if (cached && mounted) {
-            try { setMarketData(JSON.parse(cached)); } catch {}
-          } else if (DEFAULT_SPECS[savedTicker] && mounted) {
-            setMarketData(DEFAULT_SPECS[savedTicker]);
+          if (!savedTicker) {
+            if (mounted) {
+              setMarketData(null);
+              setHistoryData(null);
+            }
+          } else {
+            const cached = localStorage.getItem(`moex_market_data_${savedTicker}`);
+            if (cached && mounted) {
+              try { setMarketData(JSON.parse(cached)); } catch {}
+            } else if (DEFAULT_SPECS[savedTicker] && mounted) {
+              setMarketData(DEFAULT_SPECS[savedTicker]);
+            }
           }
         }
 
-        // Always guarantee preloaded baseline
-        const pre = getPreloadedHistory(targetTicker);
-        if (pre.length > 0 && mounted) {
-          setHistoryData(pre);
-          setHistoryStatus('success');
+        if (targetTicker) {
+          // Guarantee preloaded baseline if targetTicker exists
+          const pre = getPreloadedHistory(targetTicker);
+          if (pre.length > 0 && mounted) {
+            setHistoryData(pre);
+            setHistoryStatus('success');
+          }
         }
 
         const savedInstStr = localStorage.getItem('moex_instruments');
@@ -380,14 +387,18 @@ export default function Home() {
           if (Array.isArray(inst) && inst.length > 0 && mounted) {
             setAllInstruments({ list: inst, synced: true });
           }
+        } else if (mounted) {
+          setAllInstruments({ list: FORTS_PRELOADED_SECURITIES, synced: false });
         }
         const savedTradesStr = localStorage.getItem('moex_trades_v2');
-        if (savedTradesStr) {
-          const parsed = JSON.parse(savedTradesStr);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            parsedTrades = parsed;
-            if (mounted) setTrades(parsed);
-          }
+        if (savedTradesStr !== null) {
+          try {
+            const parsed = JSON.parse(savedTradesStr);
+            if (Array.isArray(parsed)) {
+              parsedTrades = parsed;
+              if (mounted) setTrades(parsed);
+            }
+          } catch {}
         }
       } catch (e) {
         console.error('Failed to load local storage:', e);
@@ -395,12 +406,32 @@ export default function Home() {
 
       if (mounted) {
         setNow(Date.now());
-        fetchMarketData(targetTicker, parsedTrades);
+        if (targetTicker) {
+          fetchMarketData(targetTicker, parsedTrades);
+        }
       }
     };
     load();
     return () => { mounted = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Full Universal Reset Function
+  const performFullReset = useCallback(() => {
+    hapticFeedback('heavy');
+    setTicker('');
+    setMarketData(null);
+    setHistoryData(null);
+    setTrades([]);
+    setFunding('');
+    setCustomPrice('');
+    setError(null);
+    setShowSuggestions(false);
+    try {
+      localStorage.setItem('moex_last_ticker', '');
+      localStorage.setItem('moex_trades_v2', JSON.stringify([]));
+    } catch {}
+    showToast('Все данные, тикер и сделки полностью сброшены');
+  }, [hapticFeedback, showToast]);
 
   // Auto-extend history if trades go further back than current loaded history
   useEffect(() => {
@@ -475,14 +506,12 @@ export default function Home() {
 
   const performClearAll = () => {
     hapticFeedback('heavy');
-    setTrades([{
-      id: '1',
-      date: getMoexSessionDateStr(),
-      type: 'Long',
-      price: marketData?.last ? String(marketData.last) : '',
-      lots: 1
-    }]);
+    setTrades([]);
+    try {
+      localStorage.setItem('moex_trades_v2', JSON.stringify([]));
+    } catch {}
     setShowClearConfirm(false);
+    showToast('Реестр сделок полностью очищен');
   };
 
   const isPerp = useMemo(() => {
@@ -894,7 +923,19 @@ export default function Home() {
               value={ticker}
               onFocus={() => setShowSuggestions(true)}
               onBlur={() => setTimeout(() => setShowSuggestions(false), 250)}
-              onChange={(e) => setTicker(e.target.value.toUpperCase())}
+              onChange={(e) => {
+                const val = e.target.value.toUpperCase();
+                setTicker(val);
+                if (!val.trim()) {
+                  setMarketData(null);
+                  setHistoryData(null);
+                  setTrades([]);
+                  try {
+                    localStorage.setItem('moex_last_ticker', '');
+                    localStorage.setItem('moex_trades_v2', JSON.stringify([]));
+                  } catch {}
+                }
+              }}
               onKeyDown={(e) => { if (e.key === 'Enter') fetchMarketData(ticker); }}
               placeholder="ПОИСК ТИКЕРА..."
               className="bg-zinc-950 border border-zinc-800 rounded-xl pl-10 pr-10 py-2.5 w-full text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono uppercase transition-all h-11"
@@ -902,8 +943,9 @@ export default function Home() {
             <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-500 group-focus-within:text-blue-400 transition-colors" />
             {ticker && (
               <button 
-                onClick={() => { setTicker(''); setShowSuggestions(false); }} 
-                className="absolute right-3.5 top-3.5 text-zinc-500 hover:text-white transition-opacity"
+                onClick={performFullReset} 
+                title="Очистить и сбросить все параметры"
+                className="absolute right-3.5 top-3.5 text-zinc-500 hover:text-rose-400 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -945,6 +987,16 @@ export default function Home() {
           >
             <RefreshCw className={cn("w-4 h-4 text-blue-400", loading && "animate-spin")} />
             <span className="hidden sm:inline">Обновить</span>
+          </button>
+
+          {/* Universal Full Reset Button */}
+          <button 
+            onClick={performFullReset}
+            title="Сбросить выбранный тикер и все сделки"
+            className="bg-zinc-950 hover:bg-rose-950/40 border border-zinc-800 hover:border-rose-800/60 text-zinc-400 hover:text-rose-300 rounded-xl h-11 px-3.5 flex items-center gap-1.5 transition-all active:scale-95 shrink-0 text-xs font-bold"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+            <span className="hidden sm:inline">Сбросить всё</span>
           </button>
 
           {/* Instruments Sync / DB Button */}
@@ -1013,8 +1065,8 @@ export default function Home() {
                 <div>
                   <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Итоговый финансовый результат</p>
                   <h2 className="text-base font-black text-white uppercase mt-0.5 flex items-center gap-2">
-                    {ticker}
-                    {isPerp && (
+                    {ticker || "ТИКЕР НЕ ВЫБРАН"}
+                    {isPerp && ticker && (
                       <span className="px-2 py-0.5 bg-amber-500/20 border border-amber-500/40 text-amber-400 text-[9px] font-black rounded-md tracking-wider">
                         ВЕЧНЫЙ ФЬЮЧЕРС
                       </span>
@@ -1208,7 +1260,10 @@ export default function Home() {
                 </div>
               </div>
             ) : (
-              <div className="py-6 text-center text-zinc-500 text-xs">Загрузка спецификации...</div>
+              <div className="py-8 px-4 text-center text-zinc-500 text-xs bg-zinc-950/60 rounded-2xl border border-zinc-800/60 space-y-1">
+                <p className="font-bold text-zinc-400">Тикер не выбран</p>
+                <p className="text-[11px] text-zinc-500">Введите тикер в поиске выше (например, USDRUBF, SBERF, CNYRUBF)</p>
+              </div>
             )}
           </div>
         </section>
@@ -1249,17 +1304,35 @@ export default function Home() {
             </div>
 
             <div className="space-y-3.5 overflow-y-auto max-h-[640px] pr-1">
-              {trades.map((trade, i) => (
-                <TradeCard
-                  key={trade.id}
-                  trade={trade}
-                  index={i}
-                  totalCount={trades.length}
-                  suggestedPrice={historyMap.get(trade.date)}
-                  onUpdate={updateTrade}
-                  onRemove={removeTrade}
-                />
-              ))}
+              {trades.length === 0 ? (
+                <div className="py-12 px-4 text-center border border-dashed border-zinc-800/80 rounded-2xl bg-zinc-950/40 space-y-3">
+                  <div className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center mx-auto text-zinc-500 border border-zinc-800">
+                    <Plus className="w-5 h-5 text-blue-400" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-zinc-300">Реестр сделок пуст</p>
+                    <p className="text-[11px] text-zinc-500 mt-0.5">Нажмите «+ Сделка», чтобы добавить вход в позицию</p>
+                  </div>
+                  <button 
+                    onClick={addTrade} 
+                    className="text-xs font-bold px-4 py-2 rounded-xl bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30 transition-all active:scale-95 inline-flex items-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" /> Добавить первую сделку
+                  </button>
+                </div>
+              ) : (
+                trades.map((trade, i) => (
+                  <TradeCard
+                    key={trade.id}
+                    trade={trade}
+                    index={i}
+                    totalCount={trades.length}
+                    suggestedPrice={historyMap.get(trade.date)}
+                    onUpdate={updateTrade}
+                    onRemove={removeTrade}
+                  />
+                ))
+              )}
             </div>
           </div>
         </section>

@@ -36,15 +36,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build Next.js & Prepare Web Assets
+      - name: Build Next.js & Sync Capacitor
         run: |
           npm run build
-          rm -rf out
-          mkdir -p out
-          cp -r .next/server/app/* out/
-          mkdir -p out/_next
-          cp -r .next/static out/_next/ 2>/dev/null || true
-          cp -r public/* out/ 2>/dev/null || true
           npx cap sync android
 
       - name: Build Android APK
